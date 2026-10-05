@@ -224,6 +224,8 @@ export default function App() {
   // قفل همزمانی حذف؛ قبل از اولین await تنظیم می‌شود تا double-click یا clickهای سریع
   // هرگز چند عملیات delete با یک rowIndex را به Google Sheets ارسال نکنند.
   const deleteInProgressRef = React.useRef<boolean>(false);
+  // قفل همزمانی ویرایش برای جلوگیری از ارسال چند update با یک rowIndex قدیمی.
+  const updateInProgressRef = React.useRef<boolean>(false);
 
   const showNotification = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     if (notificationTimerRef.current) {
@@ -566,13 +568,17 @@ export default function App() {
 
     // حالت الف: ویرایش ملک موجود
     if (isUpdating && editingHouse) {
-      const targetRow = editingHouse.rowIndex!;
+      const originalHouse = editingHouse;
 
       setConfirmationState({
         isOpen: true,
         type: 'update',
         title: `آیا از ویرایش اطلاعات در گوگل شیت مطمئن هستید؟`,
-        description: `اطلاعات ردیف ${toPersianDigits(targetRow)} در فایل گوگل شیت بروزرسانی خواهد شد.`,
+        description: activeSheet
+          ? `ردیف فعلی ملک در فایل "${activeSheet.title}" قبل از ویرایش دوباره بررسی خواهد شد.`
+          : webhookUrl
+          ? `ردیف فعلی ملک در فایل گوگل شیت قبل از ویرایش دوباره بررسی خواهد شد.`
+          : `اطلاعات ملک "${houseData.title || houseData.address}" ویرایش خواهد شد.`,
         details: [
           { label: 'ملک', value: houseData.title || houseData.address },
           { label: 'قیمت کل', value: `${formatNumberFa(houseData.totalPriceMillion)} میلیون تومان` },
@@ -581,32 +587,97 @@ export default function App() {
         ],
         confirmLabel: 'تأیید و ویرایش در گوگل شیت',
         isDangerous: false,
+        isLoading: false,
         onConfirm: async () => {
-          // نشان دادن وضعیت در حال ارسال
-          setHouses(prev => prev.map(h => (h.id === houseData.id ? { ...houseData, syncStatus: 'pending' as const } : h)));
-          setConfirmationState(prev => ({ ...prev, isOpen: false }));
+          // قبل از اولین await قفل می‌کنیم تا چند کلیک سریع چند update ارسال نکند.
+          if (updateInProgressRef.current) return;
+          updateInProgressRef.current = true;
+          setConfirmationState(prev => ({ ...prev, isLoading: true }));
           inFlightMutationsRef.current += 1;
 
           try {
-            if (activeSheet && currentToken) {
-              await updateHouseVisit(currentToken, activeSheet.id, targetRow, houseData, activeSheet.sheetName);
-              setHouses(prev => prev.map(h => (h.id === houseData.id ? { ...houseData, syncStatus: 'synced' as const, syncError: undefined } : h)));
+            const updateToken = currentToken;
+
+            if (activeSheet && updateToken) {
+              // rowIndex ممکن است از زمان باز شدن فرم تغییر کرده باشد؛ رکورد واقعی را دوباره پیدا کن.
+              const remoteHouses = await readHouseVisits(
+                updateToken,
+                activeSheet.id,
+                activeSheet.sheetName
+              );
+              const currentRowIndex = await resolveCurrentRowIndex(remoteHouses, originalHouse);
+              const updatedHouse = { ...houseData, rowIndex: currentRowIndex };
+
+              await updateHouseVisit(
+                updateToken,
+                activeSheet.id,
+                currentRowIndex,
+                updatedHouse,
+                activeSheet.sheetName
+              );
+
+              setHouses(prev => prev.map(h =>
+                h.id === houseData.id
+                  ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined }
+                  : h
+              ));
+              setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
               showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
-              await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+              await syncFromSheet(updateToken, activeSheet.id, activeSheet.sheetName);
             } else if (webhookUrl) {
-              await updateViaWebhook(webhookUrl, targetRow, houseData);
-              setHouses(prev => prev.map(h => (h.id === houseData.id ? { ...houseData, syncStatus: 'synced' as const, syncError: undefined } : h)));
+              const remoteHouses = await fetchViaWebhook(webhookUrl);
+              const currentRowIndex = await resolveCurrentRowIndex(remoteHouses, originalHouse);
+              const updatedHouse = { ...houseData, rowIndex: currentRowIndex };
+
+              await updateViaWebhook(webhookUrl, currentRowIndex, updatedHouse);
+
+              setHouses(prev => prev.map(h =>
+                h.id === houseData.id
+                  ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined }
+                  : h
+              ));
+              setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
               showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
               try {
                 const fresh = await fetchViaWebhook(webhookUrl);
                 setHouses(prev => mergeRemoteWithLocal(prev, fresh));
-              } catch (e) {}
+              } catch (e) {
+                console.warn('Post-update webhook sync failed:', e);
+              }
+            } else {
+              // بدون شیت، فقط نسخه محلی را ویرایش کن.
+              setHouses(prev => prev.map(h =>
+                h.id === houseData.id
+                  ? { ...houseData, syncStatus: 'synced' as const, syncError: undefined }
+                  : h
+              ));
+              setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
+              showNotification(`اطلاعات ملک در لیست محلی ویرایش شد.`, 'info');
             }
           } catch (err: any) {
             const errorMsg = getNormalizedErrorMessage(err);
-            setHouses(prev => prev.map(h => (h.id === houseData.id ? { ...houseData, syncStatus: 'failed' as const, syncError: errorMsg } : h)));
+            console.error('Update error:', err);
+            setHouses(prev => prev.map(h =>
+              h.id === houseData.id
+                ? { ...houseData, syncStatus: 'failed' as const, syncError: errorMsg }
+                : h
+            ));
+            setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
             showNotification(errorMsg, 'error');
+
+            // در صورت stale شدن rowIndex، وضعیت واقعی شیت را دوباره دریافت کن.
+            try {
+              if (currentToken && activeSheet) {
+                await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+              } else if (webhookUrl) {
+                const fresh = await fetchViaWebhook(webhookUrl);
+                setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+              }
+            } catch (syncErr) {
+              console.warn('Update recovery sync failed:', syncErr);
+            }
           } finally {
+            updateInProgressRef.current = false;
             inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
           }
         },
