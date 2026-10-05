@@ -10,12 +10,14 @@ import {
   Zap, 
   Home as HomeIcon, 
   CheckCircle2, 
-  AlertCircle,
-  ExternalLink,
-  Sparkles,
-  PhoneCall,
-  Building,
-  Check
+  AlertCircle, 
+  ExternalLink, 
+  Sparkles, 
+  PhoneCall, 
+  Building, 
+  Check,
+  Download,
+  ShieldAlert
 } from 'lucide-react';
 
 import { DivarHouseVisit, ActiveSpreadsheetInfo } from './types/house';
@@ -40,6 +42,7 @@ import {
   formatNumberFa, 
   formatVerbalPriceMillion 
 } from './utils/persianUtils';
+import { exportHousesToCsv } from './utils/exportCsv';
 
 import { SheetManagerBar } from './components/SheetManagerBar';
 import { HouseCard } from './components/HouseCard';
@@ -47,18 +50,59 @@ import { HouseFormModal } from './components/HouseFormModal';
 import { ComparisonView } from './components/ComparisonView';
 import { SheetTableView } from './components/SheetTableView';
 import { ConfirmationModal, ConfirmationType } from './components/ConfirmationModal';
+import { AuthorizedDomainModal } from './components/AuthorizedDomainModal';
+import { AppsScriptWebhookModal } from './components/AppsScriptWebhookModal';
+import { 
+  appendViaWebhook, 
+  updateViaWebhook, 
+  deleteViaWebhook, 
+  fetchViaWebhook 
+} from './services/webhookService';
 
 export default function App() {
   // اطلاعات ورود و گوگل شیت
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | any | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [activeSheet, setActiveSheet] = useState<ActiveSpreadsheetInfo | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [showAuthorizedDomainModal, setShowAuthorizedDomainModal] = useState(false);
 
-  // داده‌های خانه‌ها
-  const [houses, setHouses] = useState<DivarHouseVisit[]>(SAMPLE_HOUSES);
+  // وب‌هوک گوگل شیت بدون فایربیس (Google Apps Script Web App)
+  const [webhookUrl, setWebhookUrl] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('househunt_webhook_url');
+    }
+    return null;
+  });
+  const [showWebhookModal, setShowWebhookModal] = useState(false);
+
+  // داده‌های خانه‌ها با ذخیره‌سازی محلی خودکار جهت جلوگیری از هرگونه از دست رفتن اطلاعات
+  const [houses, setHouses] = useState<DivarHouseVisit[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('househunt_persian_houses');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {
+        console.warn('Failed to load local houses:', e);
+      }
+    }
+    return SAMPLE_HOUSES;
+  });
   const [filteredHouses, setFilteredHouses] = useState<DivarHouseVisit[]>(SAMPLE_HOUSES);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && houses.length > 0) {
+      try {
+        localStorage.setItem('househunt_persian_houses', JSON.stringify(houses));
+      } catch (e) {
+        console.warn('Failed to save to localStorage:', e);
+      }
+    }
+  }, [houses]);
 
   // وضعیت‌های نمایش و فیلتر
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
@@ -151,7 +195,12 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Sign-in error:', err);
-      showNotification('ورود با حساب گوگل لغو شد یا با خطا مواجه گردید.', 'error');
+      if (err?.code === 'auth/unauthorized-domain' || String(err?.message || '').includes('unauthorized-domain')) {
+        setShowAuthorizedDomainModal(true);
+        showNotification('دامنه اختصاصی شما هنوز در فایربیس مجاز نشده است. راهنمای حل مشکل باز شد.', 'error');
+      } else {
+        showNotification(err?.message || 'ورود با حساب گوگل لغو شد یا با خطا مواجه گردید.', 'error');
+      }
     } finally {
       setIsAuthLoading(false);
     }
@@ -246,8 +295,27 @@ export default function App() {
 
   // ۶. همگام‌سازی دستی با دکمه رفرش
   const handleManualSync = async () => {
+    // اگر از وب‌هوک استفاده می‌شود (بدون فایربیس)
+    if (webhookUrl) {
+      setIsSyncing(true);
+      try {
+        const remoteHouses = await fetchViaWebhook(webhookUrl);
+        if (remoteHouses.length > 0) {
+          setHouses(remoteHouses);
+          showNotification(`${toPersianDigits(remoteHouses.length)} ملک از گوگل شیت همگام شد.`);
+        } else {
+          showNotification('شیت خالی است یا آماده دریافت اطلاعات می‌باشد.');
+        }
+      } catch (err: any) {
+        showNotification('خطا در همگام‌سازی از وب‌هوک گوگل شیت', 'error');
+      } finally {
+        setIsSyncing(false);
+      }
+      return;
+    }
+
     if (!activeSheet) {
-      showNotification('هنوز هیچ اسپردشیتی متصل نشده است. از نوار بالا شیت بسازید.', 'info');
+      showNotification('هنوز هیچ اسپردشیتی متصل نشده است. از نوار بالا شیت بسازید یا وب‌هوک را وصل کنید.', 'info');
       return;
     }
     const currentToken = token || (await getAccessToken());
@@ -263,7 +331,54 @@ export default function App() {
     const currentToken = token || (await getAccessToken());
     const isUpdating = Boolean(editingHouse && editingHouse.rowIndex);
 
-    // اگر در حال ویرایش سطر در گوگل شیت هستیم، طبق دستورالعمل تأییدیه کاربر الزامی است
+    // الف) اگر اتصال از طریق وب‌هوک گوگل اپ اسکریپت باشد (بدون نیاز به فایربیس و بدون لاگین)
+    if (webhookUrl) {
+      if (isUpdating) {
+        setIsFormOpen(false);
+        setConfirmationState({
+          isOpen: true,
+          type: 'update',
+          title: `آیا از ویرایش اطلاعات در گوگل شیت مطمئن هستید؟`,
+          description: `اطلاعات ردیف ${toPersianDigits(editingHouse?.rowIndex)} در فایل گوگل شیت شما از طریق وب‌هوک ویرایش خواهد شد.`,
+          details: [
+            { label: 'ملک', value: houseData.title || houseData.address },
+            { label: 'قیمت کل', value: `${formatNumberFa(houseData.totalPriceMillion)} میلیون تومان` },
+            { label: 'متراژ', value: `${toPersianDigits(houseData.areaSqm)} متر` },
+            { label: 'امتیاز', value: `${toPersianDigits(houseData.score)} از ۱۰` },
+          ],
+          confirmLabel: 'تأیید و ویرایش در گوگل شیت',
+          isDangerous: false,
+          onConfirm: async () => {
+            try {
+              await updateViaWebhook(webhookUrl, editingHouse!.rowIndex!, houseData);
+              setHouses(prev => prev.map(h => (h.id === houseData.id ? houseData : h)));
+              setConfirmationState(prev => ({ ...prev, isOpen: false }));
+              setEditingHouse(null);
+              showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
+            } catch (err: any) {
+              showNotification('خطا در ارتباط با وب‌هوک گوگل شیت', 'error');
+            }
+          },
+        });
+        return;
+      }
+
+      // درج سطر جدید از طریق وب‌هوک
+      try {
+        const nextRow = houses.length + 2;
+        const newHouse = { ...houseData, rowIndex: nextRow };
+        await appendViaWebhook(webhookUrl, newHouse);
+        setHouses(prev => [newHouse, ...prev]);
+        setIsFormOpen(false);
+        setEditingHouse(null);
+        showNotification(`ملک "${houseData.title || houseData.address}" مستقیماً به گوگل شیت ارسال شد.`);
+        return;
+      } catch (err: any) {
+        console.error('Webhook append error:', err);
+      }
+    }
+
+    // ب) اگر اتصال از طریق گوگل شیت API و احراز هویت باشد
     if (isUpdating && activeSheet && currentToken) {
       setIsFormOpen(false);
       setConfirmationState({
@@ -322,7 +437,7 @@ export default function App() {
       }
       setIsFormOpen(false);
       setEditingHouse(null);
-      showNotification(`اطلاعات ذخیره شد. برای ذخیره دائمی، وارد گوگل شیت شوید.`, 'info');
+      showNotification(`اطلاعات در حافظه دستگاه ذخیره شد.`, 'info');
     }
   };
 
@@ -332,7 +447,9 @@ export default function App() {
       isOpen: true,
       type: 'delete',
       title: `آیا از حذف این ملک مطمئن هستید؟`,
-      description: activeSheet
+      description: webhookUrl
+        ? `ردیف ${toPersianDigits(house.rowIndex || 'مربوطه')} از فایل گوگل شیت شما حذف خواهد شد.`
+        : activeSheet
         ? `ردیف ${toPersianDigits(house.rowIndex || 'مربوطه')} از فایل "${activeSheet.title}" حذف خواهد شد.`
         : `ملک "${house.title || house.address}" حذف خواهد شد.`,
       details: [
@@ -343,6 +460,19 @@ export default function App() {
       confirmLabel: 'حذف دائمی ملک',
       isDangerous: true,
       onConfirm: async () => {
+        // حذف با وب‌هوک بدون فایربیس
+        if (webhookUrl && house.rowIndex) {
+          try {
+            await deleteViaWebhook(webhookUrl, house.rowIndex);
+            setHouses(prev => prev.filter(h => h.id !== house.id));
+            setConfirmationState(prev => ({ ...prev, isOpen: false }));
+            showNotification(`ملک از گوگل شیت حذف شد.`);
+            return;
+          } catch (err: any) {
+            console.error('Webhook delete error:', err);
+          }
+        }
+
         const currentToken = token || (await getAccessToken());
         if (activeSheet && currentToken && house.rowIndex) {
           try {
@@ -442,12 +572,32 @@ export default function App() {
     ? [...houses].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
     : null;
 
+  const handleSaveWebhook = async (url: string) => {
+    setWebhookUrl(url);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('househunt_webhook_url', url);
+    }
+    showNotification('اتصال وب‌هوک گوگل شیت با موفقیت برقرار شد!');
+    try {
+      setIsSyncing(true);
+      const remote = await fetchViaWebhook(url);
+      if (remote.length > 0) {
+        setHouses(remote);
+      }
+    } catch (e) {
+      // Ignored if newly created
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans flex flex-col text-right">
       {/* نوار مدیریت گوگل شیت */}
       <SheetManagerBar
         user={user}
         activeSheet={activeSheet}
+        webhookUrl={webhookUrl}
         isLoading={isAuthLoading}
         isSyncing={isSyncing}
         onSignIn={handleSignIn}
@@ -455,6 +605,7 @@ export default function App() {
         onSync={handleManualSync}
         onCreateNewSheet={handleCreateNewSheet}
         onConnectExistingSheet={handleConnectExistingSheet}
+        onOpenWebhookModal={() => setShowWebhookModal(true)}
       />
 
       {/* پیام تست شناور */}
@@ -583,6 +734,33 @@ export default function App() {
                   <span>سطرهای شیت</span>
                 </button>
               </div>
+
+              {/* دکمه دانلود فایل اکسل (CSV) */}
+              <button
+                type="button"
+                onClick={() => {
+                  exportHousesToCsv(houses);
+                  showNotification('فایل اکسل با موفقیت دانلود شد.');
+                }}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border border-slate-200"
+                title="دانلود فایل اکسل CSV از تمام خانه‌های ثبت شده"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-600" />
+                <span>خروجی اکسل</span>
+              </button>
+
+              {/* راهنمای دامنه در صورت عدم اتصال */}
+              {!user && (
+                <button
+                  type="button"
+                  onClick={() => setShowAuthorizedDomainModal(true)}
+                  className="px-2.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-xl text-xs font-bold flex items-center gap-1 transition-all border border-amber-200"
+                  title="راهنمای اتصال دامنه به فایربیس"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
+                  <span className="hidden sm:inline">تنظیم دامنه</span>
+                </button>
+              )}
 
               {/* دکمه طلایی: ثبت سریع در حضور مشاور املاک */}
               <button
@@ -760,6 +938,20 @@ export default function App() {
         isLoading={isSyncing}
         onConfirm={confirmationState.onConfirm}
         onCancel={() => setConfirmationState(prev => ({ ...prev, isOpen: false }))}
+      />
+
+      {/* ۴. راهنمای حل مشکل دامنه غیرمجاز فایربیس */}
+      <AuthorizedDomainModal
+        isOpen={showAuthorizedDomainModal}
+        onClose={() => setShowAuthorizedDomainModal(false)}
+      />
+
+      {/* ۵. مودال اتصال مستقیم وب‌هوک به گوگل شیت بدون فایربیس و بدون لاگین */}
+      <AppsScriptWebhookModal
+        isOpen={showWebhookModal}
+        currentWebhookUrl={webhookUrl || ''}
+        onClose={() => setShowWebhookModal(false)}
+        onSave={handleSaveWebhook}
       />
     </div>
   );
