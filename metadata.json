@@ -1,0 +1,6 @@
+{
+  "name": "HouseHunt - Home Visit & Buying Sheet Manager",
+  "description": "Organize, score, and manage house visits in Google Sheets. Track property details, inspection checklists, pros & cons, photos, and compare homes seamlessly.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
