@@ -805,9 +805,10 @@ export default function App() {
         deleteInProgressRef.current = true;
         setConfirmationState(prev => ({ ...prev, isLoading: true }));
         inFlightMutationsRef.current += 1;
+        let currentToken: string | null = token;
 
         try {
-          const currentToken = token || (await getAccessToken());
+          currentToken = currentToken || (await getAccessToken());
 
           // اولویت اول: حذف مستقیم از طریق Google Sheets API
           if (activeSheet && currentToken) {
