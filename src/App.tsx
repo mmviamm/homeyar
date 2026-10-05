@@ -193,6 +193,7 @@ export default function App() {
     details: [],
     confirmLabel: 'تأیید',
     isDangerous: false,
+    isLoading: false,
     onConfirm: async () => {},
   });
 
@@ -220,6 +221,9 @@ export default function App() {
 
   // شمارشگر جهش‌های در حال انجام (ثبت، ویرایش، حذف، تلاش مجدد) برای جلوگیری از تداخل پولینگ خودکار
   const inFlightMutationsRef = React.useRef<number>(0);
+  // قفل همزمانی حذف؛ قبل از اولین await تنظیم می‌شود تا double-click یا clickهای سریع
+  // هرگز چند عملیات delete با یک rowIndex را به Google Sheets ارسال نکنند.
+  const deleteInProgressRef = React.useRef<boolean>(false);
 
   const showNotification = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     if (notificationTimerRef.current) {
@@ -740,6 +744,41 @@ export default function App() {
     }
   };
 
+  // هویت پایدار ملک برای جلوگیری از اتکا به rowIndex که با حذف/جابجایی سطرها تغییر می‌کند
+  const getHouseIdentityKey = (house: DivarHouseVisit): string => {
+    const url = (house.divarUrl || '').trim();
+    if (url) return `url:${url}`;
+    return `title-address:${(house.title || '').trim()}|${(house.address || '').trim()}`;
+  };
+
+  // قبل از حذف، rowIndex فعلی را از روی محتوای واقعی شیت پیدا می‌کنیم.
+  // اگر rowIndex قدیمی باشد، هرگز به‌صورت کورکورانه ردیف دیگری را حذف نمی‌کنیم.
+  const resolveCurrentRowIndex = async (
+    remoteHouses: DivarHouseVisit[],
+    house: DivarHouseVisit
+  ): Promise<number> => {
+    const identity = getHouseIdentityKey(house);
+
+    const matches = remoteHouses.filter(remote => getHouseIdentityKey(remote) === identity);
+
+    if (house.rowIndex) {
+      const rowAtExpectedIndex = remoteHouses.find(remote => remote.rowIndex === house.rowIndex);
+      if (rowAtExpectedIndex && getHouseIdentityKey(rowAtExpectedIndex) === identity) {
+        return house.rowIndex;
+      }
+    }
+
+    if (matches.length === 1 && matches[0].rowIndex) {
+      return matches[0].rowIndex;
+    }
+
+    if (matches.length === 0) {
+      throw new Error('این ملک دیگر در گوگل شیت پیدا نشد. اطلاعات برنامه با شیت همگام‌سازی می‌شود.');
+    }
+
+    throw new Error('چند رکورد مشابه در گوگل شیت پیدا شد؛ برای جلوگیری از حذف اشتباه، عملیات متوقف شد.');
+  };
+
   // ۱۴. حذف مورد با تأییدیه الزامی کاربر و اجرای دقیق روی گوگل شیت
   const handleDeleteRequest = (house: DivarHouseVisit) => {
     setConfirmationState({
@@ -747,9 +786,9 @@ export default function App() {
       type: 'delete',
       title: `آیا از حذف این ملک مطمئن هستید؟`,
       description: activeSheet
-        ? `ردیف ${toPersianDigits(house.rowIndex || 'مربوطه')} از فایل "${activeSheet.title}" حذف خواهد شد.`
+        ? `ردیف فعلی ملک در فایل "${activeSheet.title}" قبل از حذف دوباره بررسی خواهد شد.`
         : webhookUrl
-        ? `ردیف ${toPersianDigits(house.rowIndex || 'مربوطه')} از فایل گوگل شیت شما حذف خواهد شد.`
+        ? `ردیف فعلی ملک در فایل گوگل شیت قبل از حذف دوباره بررسی خواهد شد.`
         : `ملک "${house.title || house.address}" حذف خواهد شد.`,
       details: [
         { label: 'عنوان', value: house.title || house.address },
@@ -758,58 +797,97 @@ export default function App() {
       ],
       confirmLabel: 'حذف دائمی از گوگل شیت',
       isDangerous: true,
+      isLoading: false,
       onConfirm: async () => {
-        const currentToken = token || (await getAccessToken());
+        // این guard عمداً قبل از هر await است؛ بنابراین حتی چند کلیک خیلی سریع
+        // نمی‌تواند چند درخواست حذف را برای یک rowIndex قدیمی ارسال کند.
+        if (deleteInProgressRef.current) return;
+        deleteInProgressRef.current = true;
+        setConfirmationState(prev => ({ ...prev, isLoading: true }));
         inFlightMutationsRef.current += 1;
 
         try {
+          const currentToken = token || (await getAccessToken());
+
           // اولویت اول: حذف مستقیم از طریق Google Sheets API
-          if (activeSheet && currentToken && house.rowIndex) {
+          if (activeSheet && currentToken) {
+            const remoteHouses = await readHouseVisits(
+              currentToken,
+              activeSheet.id,
+              activeSheet.sheetName
+            );
+            const currentRowIndex = await resolveCurrentRowIndex(remoteHouses, house);
+
             await deleteHouseVisit(
               currentToken,
               activeSheet.id,
-              house.rowIndex,
+              currentRowIndex,
               activeSheet.sheetId,
               activeSheet.sheetName
             );
-            // حذف از لیست محلی تنها پس از تأیید موفقیت در سرور
-            setHouses(prev => prev.filter(h => h.id !== house.id && h.rowIndex !== house.rowIndex));
-            setConfirmationState(prev => ({ ...prev, isOpen: false }));
+
+            // فقط بعد از موفقیت سرور، نسخه محلی همان رکورد را حذف کن.
+            setHouses(prev => prev.filter(h =>
+              h.id !== house.id &&
+              h.rowIndex !== currentRowIndex
+            ));
+            setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
             showNotification(`ملک "${house.title || house.address}" با موفقیت از گوگل شیت حذف شد.`);
             await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
             return;
           }
 
           // اولویت دوم: حذف از طریق وب‌هوک
-          if (webhookUrl && house.rowIndex) {
-            await deleteViaWebhook(webhookUrl, house.rowIndex);
-            // حذف از لیست محلی تنها پس از تأیید موفقیت
-            setHouses(prev => prev.filter(h => h.id !== house.id && h.rowIndex !== house.rowIndex));
-            setConfirmationState(prev => ({ ...prev, isOpen: false }));
+          if (webhookUrl) {
+            const remoteHouses = await fetchViaWebhook(webhookUrl);
+            const currentRowIndex = await resolveCurrentRowIndex(remoteHouses, house);
+
+            await deleteViaWebhook(webhookUrl, currentRowIndex);
+
+            setHouses(prev => prev.filter(h =>
+              h.id !== house.id &&
+              h.rowIndex !== currentRowIndex
+            ));
+            setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
             showNotification(`ملک با موفقیت از گوگل شیت حذف شد.`);
             try {
               const fresh = await fetchViaWebhook(webhookUrl);
               setHouses(prev => mergeRemoteWithLocal(prev, fresh));
-            } catch (e) {}
+            } catch (e) {
+              console.warn('Post-delete webhook sync failed:', e);
+            }
             return;
           }
 
           // حالت آفلاین
           setHouses(prev => prev.filter(h => h.id !== house.id));
-          setConfirmationState(prev => ({ ...prev, isOpen: false }));
+          setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
           showNotification(`ملک از لیست محلی حذف شد.`);
         } catch (err: any) {
           const errorMsg = getNormalizedErrorMessage(err);
           console.error('Delete error:', err);
-          setConfirmationState(prev => ({ ...prev, isOpen: false }));
+          setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
           showNotification(errorMsg, 'error');
+
+          // اگر rowIndex قدیمی بوده یا رکورد از قبل حذف شده، بلافاصله شیت را دوباره بخوان
+          // تا رکورد بعدی اشتباهاً حذف نشود و UI با وضعیت واقعی هماهنگ شود.
+          try {
+            if (currentToken && activeSheet) {
+              await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+            } else if (webhookUrl) {
+              const fresh = await fetchViaWebhook(webhookUrl);
+              setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+            }
+          } catch (syncErr) {
+            console.warn('Delete recovery sync failed:', syncErr);
+          }
         } finally {
+          deleteInProgressRef.current = false;
           inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
         }
       },
     });
   };
-
   // ۱۵. منطق جستجو و فیلترها
   useEffect(() => {
     let result = [...houses];
@@ -1317,7 +1395,7 @@ export default function App() {
         details={confirmationState.details}
         confirmLabel={confirmationState.confirmLabel}
         isDangerous={confirmationState.isDangerous}
-        isLoading={isSyncing}
+        isLoading={confirmationState.isLoading ?? isSyncing}
         onConfirm={confirmationState.onConfirm}
         onCancel={() => setConfirmationState(prev => ({ ...prev, isOpen: false }))}
       />
