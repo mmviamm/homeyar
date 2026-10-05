@@ -184,6 +184,7 @@ export default function App() {
     details: { label: string; value: string }[];
     confirmLabel: string;
     isDangerous: boolean;
+    isLoading: boolean;
     onConfirm: () => Promise<void>;
   }>({
     isOpen: false,
