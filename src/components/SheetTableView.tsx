@@ -7,7 +7,10 @@ import {
   Edit3, 
   Trash2, 
   Sparkles,
-  Phone
+  Phone,
+  AlertTriangle,
+  RefreshCw,
+  CheckCircle2
 } from 'lucide-react';
 import { DivarHouseVisit } from '../types/house';
 import { 
@@ -22,6 +25,7 @@ interface SheetTableViewProps {
   spreadsheetUrl?: string;
   onEdit: (house: DivarHouseVisit) => void;
   onDelete: (house: DivarHouseVisit) => void;
+  onRetrySync?: (house: DivarHouseVisit) => void;
 }
 
 export const SheetTableView: React.FC<SheetTableViewProps> = ({
@@ -29,6 +33,7 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
   spreadsheetUrl,
   onEdit,
   onDelete,
+  onRetrySync,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<'rowIndex' | 'totalPriceMillion' | 'score' | 'areaSqm'>('rowIndex');
@@ -212,7 +217,24 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
                 </td>
 
                 <td className="p-3 text-left whitespace-nowrap">
-                  <div className="flex items-center justify-end gap-1">
+                  <div className="flex items-center justify-end gap-1.5">
+                    {house.syncStatus === 'failed' && onRetrySync && (
+                      <button
+                        type="button"
+                        onClick={() => onRetrySync(house)}
+                        className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-3xs font-bold flex items-center gap-1 shadow-2xs"
+                        title="تلاش مجدد برای ارسال به گوگل شیت"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>ارسال مجدد</span>
+                      </button>
+                    )}
+                    {house.syncStatus === 'pending' && (
+                      <span className="p-1 text-amber-600 flex items-center gap-1 text-3xs font-bold">
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                        <span>در حال ارسال</span>
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => onEdit(house)}

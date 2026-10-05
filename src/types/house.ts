@@ -65,6 +65,10 @@ export interface DivarHouseVisit {
   reviewText: string; // یک نظر با متن کامل درباره خانه
   visitStatus: HouseVisitStatus; // وضعیت نهایی در فرآیند خرید
   
+  // وضعیت همگام‌سازی با گوگل شیت
+  syncStatus?: 'synced' | 'pending' | 'failed';
+  syncError?: string;
+  
   updatedAt?: string;
 }
 

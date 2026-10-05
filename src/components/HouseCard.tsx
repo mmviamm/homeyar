@@ -13,7 +13,10 @@ import {
   Building2, 
   FileText, 
   Banknote,
-  PhoneCall
+  PhoneCall,
+  AlertTriangle,
+  RefreshCw,
+  CheckCircle2
 } from 'lucide-react';
 import { DivarHouseVisit } from '../types/house';
 import { 
@@ -27,6 +30,7 @@ interface HouseCardProps {
   house: DivarHouseVisit;
   onEdit: (house: DivarHouseVisit) => void;
   onDeleteRequest: (house: DivarHouseVisit) => void;
+  onRetrySync?: (house: DivarHouseVisit) => void;
   isComparing?: boolean;
   onToggleCompare?: (house: DivarHouseVisit) => void;
 }
@@ -35,6 +39,7 @@ export const HouseCard: React.FC<HouseCardProps> = ({
   house,
   onEdit,
   onDeleteRequest,
+  onRetrySync,
   isComparing = false,
   onToggleCompare,
 }) => {
@@ -57,17 +62,56 @@ export const HouseCard: React.FC<HouseCardProps> = ({
 
   return (
     <div className={`bg-white rounded-3xl border transition-all duration-200 overflow-hidden shadow-xs hover:shadow-md flex flex-col justify-between text-right ${
-      isComparing ? 'border-emerald-500 ring-2 ring-emerald-500/20' : 'border-slate-200 hover:border-slate-300'
+      house.syncStatus === 'failed' 
+        ? 'border-rose-300 ring-2 ring-rose-200' 
+        : isComparing 
+        ? 'border-emerald-500 ring-2 ring-emerald-500/20' 
+        : 'border-slate-200 hover:border-slate-300'
     }`}>
       {/* هدر کارت */}
       <div className="p-5 pb-3">
+        {/* نوار خطای همگام‌سازی در صورت عدم ارسال به شیت */}
+        {house.syncStatus === 'failed' && (
+          <div className="mb-3 p-2.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between text-xs text-rose-900 font-bold">
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+              <span>عدم ارسال به شیت (خطای اینترنت)</span>
+            </div>
+            {onRetrySync && (
+              <button
+                type="button"
+                onClick={() => onRetrySync(house)}
+                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-3xs font-bold flex items-center gap-1 shadow-xs transition-colors"
+                title="تلاش مجدد برای ارسال به گوگل شیت"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>تلاش مجدد</span>
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            {/* وضعیت تماس و آگهی */}
+            {/* وضعیت تماس، آگهی و سینک شیت */}
             <div className="flex items-center gap-2 flex-wrap mb-2">
               <span className={`px-2.5 py-0.5 text-3xs font-bold rounded-full border ${getCallBadge(house.agentCallStatus)}`}>
                 {house.agentCallStatus}
               </span>
+
+              {house.syncStatus === 'synced' && (
+                <span className="px-2 py-0.5 text-3xs font-bold rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  <span>ثبت در شیت</span>
+                </span>
+              )}
+
+              {house.syncStatus === 'pending' && (
+                <span className="px-2 py-0.5 text-3xs font-bold rounded-md bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+                  <span>در حال ارسال...</span>
+                </span>
+              )}
 
               {house.divarUrl ? (
                 <a

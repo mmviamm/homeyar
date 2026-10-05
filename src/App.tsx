@@ -12,16 +12,18 @@ import {
   CheckCircle2, 
   AlertCircle, 
   ExternalLink, 
-  Sparkles, 
   PhoneCall, 
   Building, 
   Check,
   Download,
-  ShieldAlert
+  ShieldAlert,
+  AlertTriangle,
+  RefreshCw,
+  Smartphone,
+  X
 } from 'lucide-react';
 
 import { DivarHouseVisit, ActiveSpreadsheetInfo } from './types/house';
-import { SAMPLE_HOUSES } from './data/sampleHouses';
 import { 
   initAuth, 
   googleSignIn, 
@@ -52,6 +54,7 @@ import { SheetTableView } from './components/SheetTableView';
 import { ConfirmationModal, ConfirmationType } from './components/ConfirmationModal';
 import { AuthorizedDomainModal } from './components/AuthorizedDomainModal';
 import { AppsScriptWebhookModal } from './components/AppsScriptWebhookModal';
+import { DeviceSyncModal } from './components/DeviceSyncModal';
 import { 
   appendViaWebhook, 
   updateViaWebhook, 
@@ -60,13 +63,28 @@ import {
 } from './services/webhookService';
 
 export default function App() {
-  // اطلاعات ورود و گوگل شیت
+  // ۱. اطلاعات ورود و گوگل شیت
   const [user, setUser] = useState<User | any | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
-  const [activeSheet, setActiveSheet] = useState<ActiveSpreadsheetInfo | null>(null);
+  
+  // اسپردشیت فعال با ذخیره‌سازی محلی جهت پایداری اتصال در بارگذاری مجدد و دستگاه‌ها
+  const [activeSheet, setActiveSheet] = useState<ActiveSpreadsheetInfo | null>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('househunt_active_sheet');
+        if (saved) return JSON.parse(saved);
+      } catch (e) {
+        console.warn('Failed to parse activeSheet from storage:', e);
+      }
+    }
+    return null;
+  });
+
   const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncedTime, setLastSyncedTime] = useState<Date | null>(null);
   const [showAuthorizedDomainModal, setShowAuthorizedDomainModal] = useState(false);
+  const [showDeviceSyncModal, setShowDeviceSyncModal] = useState(false);
 
   // وب‌هوک گوگل شیت بدون فایربیس (Google Apps Script Web App)
   const [webhookUrl, setWebhookUrl] = useState<string | null>(() => {
@@ -77,25 +95,37 @@ export default function App() {
   });
   const [showWebhookModal, setShowWebhookModal] = useState(false);
 
-  // داده‌های خانه‌ها با ذخیره‌سازی محلی خودکار جهت جلوگیری از هرگونه از دست رفتن اطلاعات
+  // ۲. داده‌های خانه‌ها - بدون هیچ داده تستی یا فرضی (پایگاه داده اصلی: گوگل شیت)
   const [houses, setHouses] = useState<DivarHouseVisit[]>(() => {
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem('househunt_persian_houses');
         if (saved) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // حذف کامل و پاکسازی هرگونه داده تستی باقی‌مانده از قبل
+            const realHouses = parsed.filter((h: any) => 
+              h && 
+              !String(h.id || '').startsWith('sample-') && 
+              !String(h.id || '').startsWith('divar-1') && 
+              !String(h.id || '').startsWith('divar-2') && 
+              !String(h.id || '').startsWith('divar-3')
+            );
+            return realHouses;
+          }
         }
       } catch (e) {
         console.warn('Failed to load local houses:', e);
       }
     }
-    return SAMPLE_HOUSES;
+    return [];
   });
-  const [filteredHouses, setFilteredHouses] = useState<DivarHouseVisit[]>(SAMPLE_HOUSES);
 
+  const [filteredHouses, setFilteredHouses] = useState<DivarHouseVisit[]>([]);
+
+  // ذخیره پشتیبان محلی از داده‌های واقعی (برای حفاظت در برابر قطعی اتصال)
   useEffect(() => {
-    if (typeof window !== 'undefined' && houses.length > 0) {
+    if (typeof window !== 'undefined') {
       try {
         localStorage.setItem('househunt_persian_houses', JSON.stringify(houses));
       } catch (e) {
@@ -103,6 +133,35 @@ export default function App() {
       }
     }
   }, [houses]);
+
+  // پایداری اطلاعات شیت متصل در مرورگر
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (activeSheet) {
+        localStorage.setItem('househunt_active_sheet', JSON.stringify(activeSheet));
+        localStorage.setItem('househunt_spreadsheet_id', activeSheet.id);
+      } else {
+        localStorage.removeItem('househunt_active_sheet');
+      }
+    }
+  }, [activeSheet]);
+
+  // ۳. بررسی پارامترهای لینک ورودی (?sheet=... یا ?webhook=...) برای اتصال فوری در دیوایس دوم
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const sheetParam = params.get('sheet');
+      const webhookParam = params.get('webhook');
+      
+      if (sheetParam) {
+        localStorage.setItem('househunt_spreadsheet_id', sheetParam);
+      }
+      if (webhookParam) {
+        setWebhookUrl(webhookParam);
+        localStorage.setItem('househunt_webhook_url', webhookParam);
+      }
+    }
+  }, []);
 
   // وضعیت‌های نمایش و فیلتر
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
@@ -116,7 +175,7 @@ export default function App() {
   const [editingHouse, setEditingHouse] = useState<DivarHouseVisit | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
 
-  // مودال تأییدیه کاربر (اجباری طبق دستورالعمل گوگل ورک‌اسپیس برای ویرایش و حذف در شیت)
+  // مودال تأییدیه کاربر (طبق الزامات امنیتی گوگل ورک‌اسپیس برای ویرایش و حذف در شیت)
   const [confirmationState, setConfirmationState] = useState<{
     isOpen: boolean;
     type: ConfirmationType;
@@ -137,24 +196,155 @@ export default function App() {
     onConfirm: async () => {},
   });
 
+  const TIMEOUT_ERROR_MESSAGE = 'زمان انتظار ارتباط با گوگل شیت به پایان رسید (کندی یا اختلال اینترنت). لطفاً دوباره امتحان کنید.';
+
+  const getNormalizedErrorMessage = useCallback((err: any): string => {
+    const msg = String(err?.message || '');
+    if (
+      err?.name === 'AbortError' ||
+      msg.toLowerCase().includes('abort') ||
+      msg.includes('زمان انتظار') ||
+      msg.includes('timeout')
+    ) {
+      return TIMEOUT_ERROR_MESSAGE;
+    }
+    return err?.message || 'خطا در برقراری ارتباط با گوگل شیت. اتصال اینترنت را بررسی نمایید.';
+  }, []);
+
   const [notification, setNotification] = useState<{
     type: 'success' | 'error' | 'info';
     message: string;
   } | null>(null);
 
-  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
-    setNotification({ type, message });
-    setTimeout(() => {
-      setNotification(null);
-    }, 4500);
-  };
+  const notificationTimerRef = React.useRef<any>(null);
 
-  // ۱. بررسی ورود کاربر در شروع برنامه
+  // شمارشگر جهش‌های در حال انجام (ثبت، ویرایش، حذف، تلاش مجدد) برای جلوگیری از تداخل پولینگ خودکار
+  const inFlightMutationsRef = React.useRef<number>(0);
+
+  const showNotification = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    if (notificationTimerRef.current) {
+      clearTimeout(notificationTimerRef.current);
+    }
+    setNotification({ type, message });
+    // پیام‌های خطا زمان طولانی‌تری (۱۰ ثانیه) نمایش داده می‌شوند تا کاربر با دقت پیام را بخواند
+    notificationTimerRef.current = setTimeout(() => {
+      setNotification(null);
+    }, type === 'error' ? 10000 : 5000);
+  }, []);
+
+  // تابع یکپارچه‌ساز داده‌های محلی و گوگل شیت (تضمین حفظ موارد در حال ارسال و خطادار)
+  const mergeRemoteWithLocal = useCallback((prevHouses: DivarHouseVisit[], remoteHouses: DivarHouseVisit[]): DivarHouseVisit[] => {
+    // مواردی که در حال حاضر در حال ارسال هستند یا به دلیل خطای اینترنت ارسال نشده‌اند
+    const activeUnsynced = prevHouses.filter(h => h.syncStatus === 'pending' || h.syncStatus === 'failed');
+
+    const remoteSynced = remoteHouses.map(rh => ({
+      ...rh,
+      syncStatus: 'synced' as const,
+      syncError: undefined,
+    }));
+
+    const keptUnsynced: DivarHouseVisit[] = [];
+    for (const local of activeUnsynced) {
+      // اگر ملک هنوز در حال ارسال است (pending)، تحت هیچ شرایطی نباید پاک شود
+      if (local.syncStatus === 'pending') {
+        keptUnsynced.push(local);
+        continue;
+      }
+
+      // برای موارد failed، اگر دقیقاً در شیت آمده باشد یعنی ثبت شده، در غیر این صورت باید باقی بماند
+      const foundInRemote = remoteSynced.some(rem => {
+        if (local.divarUrl && local.divarUrl.trim() && rem.divarUrl && rem.divarUrl.trim()) {
+          if (local.divarUrl.trim() === rem.divarUrl.trim()) return true;
+        }
+        if (
+          local.title && local.title.trim() &&
+          local.title.trim() === rem.title.trim() &&
+          (local.address || '').trim() === (rem.address || '').trim()
+        ) {
+          return true;
+        }
+        return false;
+      });
+
+      if (!foundInRemote) {
+        keptUnsynced.push(local);
+      }
+    }
+
+    const seenIds = new Set<string>();
+    const result: DivarHouseVisit[] = [];
+
+    // ابتدا موارد محلی (در حال ارسال یا ناموفق) در بالای لیست قرار می‌گیرند
+    for (const h of keptUnsynced) {
+      seenIds.add(h.id);
+      result.push(h);
+    }
+
+    for (const h of remoteSynced) {
+      const hasPendingMatch = keptUnsynced.some(k => 
+        k.syncStatus === 'pending' && (
+          (k.divarUrl && k.divarUrl.trim() === h.divarUrl.trim()) ||
+          (k.title.trim() === h.title.trim() && (k.address || '').trim() === (h.address || '').trim())
+        )
+      );
+
+      if (!hasPendingMatch && !seenIds.has(h.id)) {
+        seenIds.add(h.id);
+        result.push(h);
+      }
+    }
+
+    return result;
+  }, []);
+
+  // ۴. خواندن و همگام‌سازی مستقیم از گوگل شیت
+  const syncFromSheet = useCallback(async (accessToken: string, spreadsheetId: string, sheetName?: string) => {
+    setIsSyncing(true);
+    try {
+      const remoteHouses = await readHouseVisits(accessToken, spreadsheetId, sheetName);
+      setLastSyncedTime(new Date());
+
+      // ادغام ایمن: داده‌های در حال ارسال و خطادار کاربر هرگز غیب نمی‌شوند
+      setHouses(prev => mergeRemoteWithLocal(prev, remoteHouses));
+
+      showNotification(`${toPersianDigits(remoteHouses.length)} ملک با موفقیت از گوگل شیت همگام‌سازی شد.`);
+    } catch (err: any) {
+      console.error('خطا در بارگذاری از شیت:', err);
+      const errorMsg = getNormalizedErrorMessage(err);
+      showNotification(errorMsg, 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [mergeRemoteWithLocal, getNormalizedErrorMessage, showNotification]);
+
+  // ۵. بررسی ورود کاربر در شروع برنامه و اتصال به اسپردشیت ذخیره شده
   useEffect(() => {
     const unsubscribe = initAuth(
-      (currentUser, accessToken) => {
+      async (currentUser, accessToken) => {
         setUser(currentUser);
         setToken(accessToken);
+
+        // اگر کاربر قبلاً شیت داشته یا لینکی با پارامتر ?sheet باز شده، خودکار وصل شو
+        if (accessToken) {
+          const targetId = activeSheet?.id || localStorage.getItem('househunt_spreadsheet_id');
+          if (targetId) {
+            try {
+              const details = await getSpreadsheetDetails(accessToken, targetId);
+              const connected: ActiveSpreadsheetInfo = {
+                id: targetId,
+                title: details.title,
+                url: details.url,
+                sheetName: details.sheetName,
+                sheetId: details.sheetId,
+                lastSyncedAt: new Date(),
+              };
+              setActiveSheet(connected);
+              await syncFromSheet(accessToken, targetId, details.sheetName);
+            } catch (err) {
+              console.warn('اتصال خودکار به شیت با خطا مواجه شد:', err);
+            }
+          }
+        }
       },
       () => {
         setUser(null);
@@ -162,28 +352,60 @@ export default function App() {
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [syncFromSheet]);
 
-  // ۲. همگام‌سازی و خواندن سطرها از گوگل شیت
-  const syncFromSheet = useCallback(async (accessToken: string, spreadsheetId: string) => {
-    setIsSyncing(true);
-    try {
-      const remoteHouses = await readHouseVisits(accessToken, spreadsheetId);
-      if (remoteHouses.length > 0) {
-        setHouses(remoteHouses);
-        showNotification(`${toPersianDigits(remoteHouses.length)} ملک با موفقیت از گوگل شیت بارگذاری شد.`);
-      } else {
-        showNotification('اسپردشیت متصل شد. آماده برای ثبت موارد جدید!');
-      }
-    } catch (err: any) {
-      console.error('خطا در بارگذاری از شیت:', err);
-      showNotification(err.message || 'خطا در دریافت اطلاعات از گوگل شیت', 'error');
-    } finally {
-      setIsSyncing(false);
+  // ۶. همگام‌سازی اولیه از طریق وب‌هوک (در صورت فعال بودن وب‌هوک)
+  useEffect(() => {
+    if (webhookUrl) {
+      setIsSyncing(true);
+      fetchViaWebhook(webhookUrl)
+        .then(remote => {
+          setLastSyncedTime(new Date());
+          setHouses(prev => mergeRemoteWithLocal(prev, remote));
+        })
+        .catch(err => {
+          console.warn('همگام‌سازی اولیه وب‌هوک با خطا مواجه شد:', err);
+        })
+        .finally(() => {
+          setIsSyncing(false);
+        });
     }
-  }, []);
+  }, [webhookUrl, mergeRemoteWithLocal]);
 
-  // ۳. مدیریت ورود با گوگل
+  // ۷. همگام‌سازی خودکار در هنگام بازگشت به تب برنامه (Window Focus) و پولینگ دوره‌ای (تضمین یکسانی در دو دیوایس)
+  useEffect(() => {
+    const handleAutoRefresh = () => {
+      // اگر کاربر در همان لحظه در حال ارسال، ویرایش یا حذف ملکی است، پولینگ را به تعویق بینداز
+      if (inFlightMutationsRef.current > 0) return;
+
+      if (token && activeSheet) {
+        syncFromSheet(token, activeSheet.id, activeSheet.sheetName);
+      } else if (webhookUrl) {
+        fetchViaWebhook(webhookUrl)
+          .then(remote => {
+            setLastSyncedTime(new Date());
+            setHouses(prev => mergeRemoteWithLocal(prev, remote));
+          })
+          .catch(e => console.warn('Focus sync error:', e));
+      }
+    };
+
+    window.addEventListener('focus', handleAutoRefresh);
+
+    // بررسی دوره‌ای هر ۴۵ ثانیه در صورت باز بودن تب
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        handleAutoRefresh();
+      }
+    }, 45000);
+
+    return () => {
+      window.removeEventListener('focus', handleAutoRefresh);
+      clearInterval(timer);
+    };
+  }, [token, activeSheet, webhookUrl, syncFromSheet, mergeRemoteWithLocal]);
+
+  // ۸. مدیریت ورود با گوگل
   const handleSignIn = async () => {
     setIsAuthLoading(true);
     try {
@@ -192,12 +414,18 @@ export default function App() {
         setUser(result.user);
         setToken(result.accessToken);
         showNotification(`خوش آمدید ${result.user.displayName || ''}! حساب گوگل متصل شد.`);
+
+        // پس از ورود، اگر شیت قبلی وجود دارد همگام کن
+        const targetId = activeSheet?.id || localStorage.getItem('househunt_spreadsheet_id');
+        if (targetId) {
+          await handleConnectExistingSheet(targetId);
+        }
       }
     } catch (err: any) {
       console.error('Sign-in error:', err);
       if (err?.code === 'auth/unauthorized-domain' || String(err?.message || '').includes('unauthorized-domain')) {
         setShowAuthorizedDomainModal(true);
-        showNotification('دامنه اختصاصی شما هنوز در فایربیس مجاز نشده است. راهنمای حل مشکل باز شد.', 'error');
+        showNotification('دامنه شما هنوز در فایربیس مجاز نشده است. راهنمای حل مشکل باز شد.', 'error');
       } else {
         showNotification(err?.message || 'ورود با حساب گوگل لغو شد یا با خطا مواجه گردید.', 'error');
       }
@@ -211,10 +439,11 @@ export default function App() {
     setUser(null);
     setToken(null);
     setActiveSheet(null);
+    localStorage.removeItem('househunt_active_sheet');
     showNotification('از حساب کاربری گوگل خارج شدید.', 'info');
   };
 
-  // ۴. ساخت اسپردشیت جدید در گوگل شیت
+  // ۹. ساخت اسپردشیت جدید در گوگل شیت
   const handleCreateNewSheet = async (title: string = 'مدیریت و بازدید خانه‌های دیوار ۱۴۰۵') => {
     let currentToken = token || (await getAccessToken());
     if (!currentToken) {
@@ -236,16 +465,16 @@ export default function App() {
       };
       setActiveSheet(newSheetInfo);
 
-      // انتقال ردیف‌های فعلی به فایل جدید گوگل شیت
+      // اگر خانه‌ای به صورت آفلاین ثبت شده بود، به شیت جدید بفرست
       if (houses.length > 0) {
         for (const house of houses) {
           try {
-            await addHouseVisit(currentToken, res.spreadsheetId, house);
+            await addHouseVisit(currentToken, res.spreadsheetId, house, newSheetInfo.sheetName);
           } catch (e) {
             console.warn('Initial row append error:', e);
           }
         }
-        await syncFromSheet(currentToken, res.spreadsheetId);
+        await syncFromSheet(currentToken, res.spreadsheetId, newSheetInfo.sheetName);
       }
 
       showNotification(`اسپردشیت جدید "${title}" در گوگل درایو شما ساخته و متصل شد.`);
@@ -257,7 +486,7 @@ export default function App() {
     }
   };
 
-  // ۵. اتصال به اسپردشیت قبلی
+  // ۱۰. اتصال به اسپردشیت قبلی
   const handleConnectExistingSheet = async (urlOrId: string) => {
     let currentToken = token || (await getAccessToken());
     if (!currentToken) {
@@ -283,7 +512,7 @@ export default function App() {
         lastSyncedAt: new Date(),
       };
       setActiveSheet(connected);
-      await syncFromSheet(currentToken, cleanId);
+      await syncFromSheet(currentToken, cleanId, details.sheetName);
       showNotification(`اتصال به فایل "${details.title}" با موفقیت برقرار شد.`);
     } catch (err: any) {
       console.error('Failed to connect sheet:', err);
@@ -293,21 +522,18 @@ export default function App() {
     }
   };
 
-  // ۶. همگام‌سازی دستی با دکمه رفرش
+  // ۱۱. همگام‌سازی دستی با دکمه رفرش
   const handleManualSync = async () => {
-    // اگر از وب‌هوک استفاده می‌شود (بدون فایربیس)
     if (webhookUrl) {
       setIsSyncing(true);
       try {
         const remoteHouses = await fetchViaWebhook(webhookUrl);
-        if (remoteHouses.length > 0) {
-          setHouses(remoteHouses);
-          showNotification(`${toPersianDigits(remoteHouses.length)} ملک از گوگل شیت همگام شد.`);
-        } else {
-          showNotification('شیت خالی است یا آماده دریافت اطلاعات می‌باشد.');
-        }
+        setLastSyncedTime(new Date());
+        setHouses(prev => mergeRemoteWithLocal(prev, remoteHouses));
+        showNotification(`${toPersianDigits(remoteHouses.length)} ملک با موفقیت از گوگل شیت همگام‌سازی شد.`);
       } catch (err: any) {
-        showNotification('خطا در همگام‌سازی از وب‌هوک گوگل شیت', 'error');
+        const errorMsg = getNormalizedErrorMessage(err);
+        showNotification(errorMsg, 'error');
       } finally {
         setIsSyncing(false);
       }
@@ -323,69 +549,26 @@ export default function App() {
       await handleSignIn();
       return;
     }
-    await syncFromSheet(currentToken, activeSheet.id);
+    await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
   };
 
-  // ۷. ذخیره ملک (افزودن جدید یا ویرایش با تأییدیه کاربر)
+  // ۱۲. ذخیره ملک با پیگیری دقیق وضعیت همگام‌سازی و خطایابی اینترنت
   const handleSaveHouseForm = async (houseData: DivarHouseVisit) => {
     const currentToken = token || (await getAccessToken());
     const isUpdating = Boolean(editingHouse && editingHouse.rowIndex);
 
-    // الف) اگر اتصال از طریق وب‌هوک گوگل اپ اسکریپت باشد (بدون نیاز به فایربیس و بدون لاگین)
-    if (webhookUrl) {
-      if (isUpdating) {
-        setIsFormOpen(false);
-        setConfirmationState({
-          isOpen: true,
-          type: 'update',
-          title: `آیا از ویرایش اطلاعات در گوگل شیت مطمئن هستید؟`,
-          description: `اطلاعات ردیف ${toPersianDigits(editingHouse?.rowIndex)} در فایل گوگل شیت شما از طریق وب‌هوک ویرایش خواهد شد.`,
-          details: [
-            { label: 'ملک', value: houseData.title || houseData.address },
-            { label: 'قیمت کل', value: `${formatNumberFa(houseData.totalPriceMillion)} میلیون تومان` },
-            { label: 'متراژ', value: `${toPersianDigits(houseData.areaSqm)} متر` },
-            { label: 'امتیاز', value: `${toPersianDigits(houseData.score)} از ۱۰` },
-          ],
-          confirmLabel: 'تأیید و ویرایش در گوگل شیت',
-          isDangerous: false,
-          onConfirm: async () => {
-            try {
-              await updateViaWebhook(webhookUrl, editingHouse!.rowIndex!, houseData);
-              setHouses(prev => prev.map(h => (h.id === houseData.id ? houseData : h)));
-              setConfirmationState(prev => ({ ...prev, isOpen: false }));
-              setEditingHouse(null);
-              showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
-            } catch (err: any) {
-              showNotification('خطا در ارتباط با وب‌هوک گوگل شیت', 'error');
-            }
-          },
-        });
-        return;
-      }
+    setIsFormOpen(false);
+    setEditingHouse(null);
 
-      // درج سطر جدید از طریق وب‌هوک
-      try {
-        const nextRow = houses.length + 2;
-        const newHouse = { ...houseData, rowIndex: nextRow };
-        await appendViaWebhook(webhookUrl, newHouse);
-        setHouses(prev => [newHouse, ...prev]);
-        setIsFormOpen(false);
-        setEditingHouse(null);
-        showNotification(`ملک "${houseData.title || houseData.address}" مستقیماً به گوگل شیت ارسال شد.`);
-        return;
-      } catch (err: any) {
-        console.error('Webhook append error:', err);
-      }
-    }
+    // حالت الف: ویرایش ملک موجود
+    if (isUpdating && editingHouse) {
+      const targetRow = editingHouse.rowIndex!;
 
-    // ب) اگر اتصال از طریق گوگل شیت API و احراز هویت باشد
-    if (isUpdating && activeSheet && currentToken) {
-      setIsFormOpen(false);
       setConfirmationState({
         isOpen: true,
         type: 'update',
         title: `آیا از ویرایش اطلاعات در گوگل شیت مطمئن هستید؟`,
-        description: `این کار اطلاعات ردیف ${toPersianDigits(editingHouse?.rowIndex)} در فایل "${activeSheet.title}" را بروزرسانی می‌کند.`,
+        description: `اطلاعات ردیف ${toPersianDigits(targetRow)} در فایل گوگل شیت بروزرسانی خواهد شد.`,
         details: [
           { label: 'ملک', value: houseData.title || houseData.address },
           { label: 'قیمت کل', value: `${formatNumberFa(houseData.totalPriceMillion)} میلیون تومان` },
@@ -395,118 +578,245 @@ export default function App() {
         confirmLabel: 'تأیید و ویرایش در گوگل شیت',
         isDangerous: false,
         onConfirm: async () => {
+          // نشان دادن وضعیت در حال ارسال
+          setHouses(prev => prev.map(h => (h.id === houseData.id ? { ...houseData, syncStatus: 'pending' as const } : h)));
+          setConfirmationState(prev => ({ ...prev, isOpen: false }));
+          inFlightMutationsRef.current += 1;
+
           try {
-            await updateHouseVisit(
-              currentToken,
-              activeSheet.id,
-              editingHouse!.rowIndex!,
-              houseData,
-              activeSheet.sheetName
-            );
-            await syncFromSheet(currentToken, activeSheet.id);
-            setConfirmationState(prev => ({ ...prev, isOpen: false }));
-            setEditingHouse(null);
-            showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
+            if (activeSheet && currentToken) {
+              await updateHouseVisit(currentToken, activeSheet.id, targetRow, houseData, activeSheet.sheetName);
+              setHouses(prev => prev.map(h => (h.id === houseData.id ? { ...houseData, syncStatus: 'synced' as const, syncError: undefined } : h)));
+              showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
+              await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+            } else if (webhookUrl) {
+              await updateViaWebhook(webhookUrl, targetRow, houseData);
+              setHouses(prev => prev.map(h => (h.id === houseData.id ? { ...houseData, syncStatus: 'synced' as const, syncError: undefined } : h)));
+              showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
+              try {
+                const fresh = await fetchViaWebhook(webhookUrl);
+                setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+              } catch (e) {}
+            }
           } catch (err: any) {
-            console.error('Update error:', err);
-            showNotification(err.message || 'خطا در ویرایش گوگل شیت', 'error');
+            const errorMsg = getNormalizedErrorMessage(err);
+            setHouses(prev => prev.map(h => (h.id === houseData.id ? { ...houseData, syncStatus: 'failed' as const, syncError: errorMsg } : h)));
+            showNotification(errorMsg, 'error');
+          } finally {
+            inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
           }
         },
       });
       return;
     }
 
-    // در غیر این صورت، ثبت مورد جدید در گوگل شیت
-    if (activeSheet && currentToken) {
-      try {
-        await addHouseVisit(currentToken, activeSheet.id, houseData, activeSheet.sheetName);
-        await syncFromSheet(currentToken, activeSheet.id);
-        setIsFormOpen(false);
-        setEditingHouse(null);
-        showNotification(`ملک "${houseData.title || houseData.address}" به گوگل شیت اضافه شد.`);
-      } catch (err: any) {
-        console.error('Append error:', err);
-        showNotification(err.message || 'خطا در افزودن به گوگل شیت', 'error');
+    // حالت ب: ثبت ملک جدید
+    const tempId = houseData.id || `house-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const nextRow = (houses.length > 0 ? Math.max(...houses.map(h => h.rowIndex || 0)) : 0) + 1;
+    const pendingHouse: DivarHouseVisit = {
+      ...houseData,
+      id: tempId,
+      rowIndex: nextRow,
+      syncStatus: 'pending',
+    };
+
+    // فوراً در رابط کاربری نمایش بده تا کاربر معطل نشود - هرگز غیب نمی‌شود
+    setHouses(prev => [pendingHouse, ...prev]);
+    inFlightMutationsRef.current += 1;
+
+    try {
+      // اولویت اول: ارسال مستقیم از طریق Google Sheets API
+      if (activeSheet && currentToken) {
+        const res = await addHouseVisit(currentToken, activeSheet.id, pendingHouse, activeSheet.sheetName);
+        const assignedRow = res.rowIndex || nextRow;
+        setHouses(prev =>
+          prev.map(h =>
+            h.id === tempId ? { ...h, syncStatus: 'synced', rowIndex: assignedRow, syncError: undefined } : h
+          )
+        );
+        showNotification(`ملک "${houseData.title || houseData.address}" با موفقیت در گوگل شیت ثبت شد.`);
+        await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+        return;
       }
-    } else {
-      // ذخیره محلی موقت در صورت عدم اتصال
-      if (isUpdating) {
-        setHouses(prev => prev.map(h => (h.id === houseData.id ? houseData : h)));
-      } else {
-        setHouses(prev => [houseData, ...prev]);
+
+      // اولویت دوم: ارسال از طریق وب‌هوک
+      if (webhookUrl) {
+        const res = await appendViaWebhook(webhookUrl, pendingHouse);
+        setHouses(prev =>
+          prev.map(h =>
+            h.id === tempId ? { ...h, syncStatus: 'synced', rowIndex: res.rowIndex || h.rowIndex, syncError: undefined } : h
+          )
+        );
+        showNotification(`ملک "${houseData.title || houseData.address}" با موفقیت در گوگل شیت ثبت شد.`);
+        try {
+          const fresh = await fetchViaWebhook(webhookUrl);
+          setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+        } catch (e) {}
+        return;
       }
-      setIsFormOpen(false);
-      setEditingHouse(null);
-      showNotification(`اطلاعات در حافظه دستگاه ذخیره شد.`, 'info');
+
+      // در صورت عدم اتصال شیت
+      setHouses(prev =>
+        prev.map(h =>
+          h.id === tempId
+            ? { ...h, syncStatus: 'failed', syncError: 'گوگل شیت هنوز متصل نشده است' }
+            : h
+        )
+      );
+      showNotification('ملک در حافظه محلی ذخیره شد. برای ارسال به گوگل شیت، از نوار بالا شیت را متصل کنید.', 'info');
+    } catch (err: any) {
+      const errorMsg = getNormalizedErrorMessage(err);
+      console.error('Append error:', err);
+      // ملک در رابط کاربری باقی می‌ماند و دکمه تلاش مجدد فعال می‌شود
+      setHouses(prev =>
+        prev.map(h => (h.id === tempId ? { ...h, syncStatus: 'failed', syncError: errorMsg } : h))
+      );
+      showNotification(errorMsg, 'error');
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
     }
   };
 
-  // ۸. حذف مورد با تأییدیه الزامی کاربر
+  // ۱۳. تابع تلاش مجدد برای ارسال ملکی که با خطا مواجه شده بود
+  const handleRetrySync = async (house: DivarHouseVisit) => {
+    setHouses(prev => prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'pending' as const, syncError: undefined } : h)));
+    showNotification(`در حال تلاش مجدد برای ارسال ملک "${house.title || house.address}" به گوگل شیت...`, 'info');
+
+    inFlightMutationsRef.current += 1;
+    const currentToken = token || (await getAccessToken());
+
+    try {
+      if (activeSheet && currentToken) {
+        if (house.rowIndex && house.rowIndex >= 1 && !house.id.startsWith('house-')) {
+          await updateHouseVisit(currentToken, activeSheet.id, house.rowIndex, house, activeSheet.sheetName);
+        } else {
+          const res = await addHouseVisit(currentToken, activeSheet.id, house, activeSheet.sheetName);
+          if (res.rowIndex) house.rowIndex = res.rowIndex;
+        }
+        setHouses(prev =>
+          prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'synced' as const, syncError: undefined } : h))
+        );
+        showNotification(`ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
+        await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+      } else if (webhookUrl) {
+        if (house.rowIndex && house.rowIndex >= 1 && !house.id.startsWith('house-')) {
+          await updateViaWebhook(webhookUrl, house.rowIndex, house);
+        } else {
+          const res = await appendViaWebhook(webhookUrl, house);
+          if (res.rowIndex) house.rowIndex = res.rowIndex;
+        }
+        setHouses(prev =>
+          prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'synced' as const, syncError: undefined } : h))
+        );
+        showNotification(`ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
+        try {
+          const fresh = await fetchViaWebhook(webhookUrl);
+          setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+        } catch (e) {}
+      } else {
+        setHouses(prev =>
+          prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'failed' as const, syncError: 'گوگل شیت متصل نیست' } : h))
+        );
+        showNotification('برای ارسال به گوگل شیت، ابتدا از نوار بالا شیت را متصل نمایید.', 'error');
+      }
+    } catch (err: any) {
+      const errorMsg = getNormalizedErrorMessage(err);
+      setHouses(prev =>
+        prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'failed' as const, syncError: errorMsg } : h))
+      );
+      showNotification(errorMsg, 'error');
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+    }
+  };
+
+  // ارسال مجدد تمام موارد ناموفق
+  const handleRetryAllFailed = async () => {
+    const failedList = houses.filter(h => h.syncStatus === 'failed');
+    if (failedList.length === 0) return;
+    showNotification(`شروع ارسال مجدد ${toPersianDigits(failedList.length)} ملک به گوگل شیت...`, 'info');
+    for (const house of failedList) {
+      await handleRetrySync(house);
+    }
+  };
+
+  // ۱۴. حذف مورد با تأییدیه الزامی کاربر و اجرای دقیق روی گوگل شیت
   const handleDeleteRequest = (house: DivarHouseVisit) => {
     setConfirmationState({
       isOpen: true,
       type: 'delete',
       title: `آیا از حذف این ملک مطمئن هستید؟`,
-      description: webhookUrl
-        ? `ردیف ${toPersianDigits(house.rowIndex || 'مربوطه')} از فایل گوگل شیت شما حذف خواهد شد.`
-        : activeSheet
+      description: activeSheet
         ? `ردیف ${toPersianDigits(house.rowIndex || 'مربوطه')} از فایل "${activeSheet.title}" حذف خواهد شد.`
+        : webhookUrl
+        ? `ردیف ${toPersianDigits(house.rowIndex || 'مربوطه')} از فایل گوگل شیت شما حذف خواهد شد.`
         : `ملک "${house.title || house.address}" حذف خواهد شد.`,
       details: [
         { label: 'عنوان', value: house.title || house.address },
         { label: 'قیمت', value: `${formatNumberFa(house.totalPriceMillion)} میلیون تومان` },
         { label: 'آدرس', value: house.address },
       ],
-      confirmLabel: 'حذف دائمی ملک',
+      confirmLabel: 'حذف دائمی از گوگل شیت',
       isDangerous: true,
       onConfirm: async () => {
-        // حذف با وب‌هوک بدون فایربیس
-        if (webhookUrl && house.rowIndex) {
-          try {
-            await deleteViaWebhook(webhookUrl, house.rowIndex);
-            setHouses(prev => prev.filter(h => h.id !== house.id));
-            setConfirmationState(prev => ({ ...prev, isOpen: false }));
-            showNotification(`ملک از گوگل شیت حذف شد.`);
-            return;
-          } catch (err: any) {
-            console.error('Webhook delete error:', err);
-          }
-        }
-
         const currentToken = token || (await getAccessToken());
-        if (activeSheet && currentToken && house.rowIndex) {
-          try {
+        inFlightMutationsRef.current += 1;
+
+        try {
+          // اولویت اول: حذف مستقیم از طریق Google Sheets API
+          if (activeSheet && currentToken && house.rowIndex) {
             await deleteHouseVisit(
               currentToken,
               activeSheet.id,
               house.rowIndex,
-              activeSheet.sheetId || 0
+              activeSheet.sheetId,
+              activeSheet.sheetName
             );
-            await syncFromSheet(currentToken, activeSheet.id);
+            // حذف از لیست محلی تنها پس از تأیید موفقیت در سرور
+            setHouses(prev => prev.filter(h => h.id !== house.id && h.rowIndex !== house.rowIndex));
             setConfirmationState(prev => ({ ...prev, isOpen: false }));
-            showNotification(`ملک از گوگل شیت حذف شد.`);
-          } catch (err: any) {
-            console.error('Delete error:', err);
-            showNotification(err.message || 'خطا در حذف از گوگل شیت', 'error');
+            showNotification(`ملک "${house.title || house.address}" با موفقیت از گوگل شیت حذف شد.`);
+            await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+            return;
           }
-        } else {
+
+          // اولویت دوم: حذف از طریق وب‌هوک
+          if (webhookUrl && house.rowIndex) {
+            await deleteViaWebhook(webhookUrl, house.rowIndex);
+            // حذف از لیست محلی تنها پس از تأیید موفقیت
+            setHouses(prev => prev.filter(h => h.id !== house.id && h.rowIndex !== house.rowIndex));
+            setConfirmationState(prev => ({ ...prev, isOpen: false }));
+            showNotification(`ملک با موفقیت از گوگل شیت حذف شد.`);
+            try {
+              const fresh = await fetchViaWebhook(webhookUrl);
+              setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+            } catch (e) {}
+            return;
+          }
+
+          // حالت آفلاین
           setHouses(prev => prev.filter(h => h.id !== house.id));
           setConfirmationState(prev => ({ ...prev, isOpen: false }));
-          showNotification(`ملک حذف شد.`);
+          showNotification(`ملک از لیست محلی حذف شد.`);
+        } catch (err: any) {
+          const errorMsg = getNormalizedErrorMessage(err);
+          console.error('Delete error:', err);
+          setConfirmationState(prev => ({ ...prev, isOpen: false }));
+          showNotification(errorMsg, 'error');
+        } finally {
+          inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
         }
       },
     });
   };
 
-  // ۹. منطق جستجو و فیلترها
+  // ۱۵. منطق جستجو و فیلترها
   useEffect(() => {
     let result = [...houses];
 
     // فیلتر دسته‌بندی
     if (filterType === 'SCHEDULED') {
       result = result.filter(h => h.appointmentDateTime && h.appointmentDateTime !== '-' && h.appointmentDateTime.trim() !== '');
-    } else if (filterType === 'CALLED_OK') {
-      result = result.filter(h => h.agentCallStatus.includes('هماهنگ شد'));
     } else if (filterType === 'LOAN_OK') {
       result = result.filter(h => h.waitsForMortgageLoan.includes('بله'));
     } else if (filterType === 'PARKING_ELEVATOR') {
@@ -572,6 +882,9 @@ export default function App() {
     ? [...houses].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
     : null;
 
+  // تعداد مواردی که با خطای ارسال به شیت مواجه شده‌اند
+  const failedHousesCount = houses.filter(h => h.syncStatus === 'failed').length;
+
   const handleSaveWebhook = async (url: string) => {
     setWebhookUrl(url);
     if (typeof window !== 'undefined') {
@@ -581,9 +894,11 @@ export default function App() {
     try {
       setIsSyncing(true);
       const remote = await fetchViaWebhook(url);
-      if (remote.length > 0) {
-        setHouses(remote);
-      }
+      setLastSyncedTime(new Date());
+      setHouses(prev => {
+        const failed = prev.filter(h => h.syncStatus === 'failed');
+        return [...failed, ...remote];
+      });
     } catch (e) {
       // Ignored if newly created
     } finally {
@@ -600,30 +915,53 @@ export default function App() {
         webhookUrl={webhookUrl}
         isLoading={isAuthLoading}
         isSyncing={isSyncing}
+        lastSyncedAt={lastSyncedTime}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
         onSync={handleManualSync}
         onCreateNewSheet={handleCreateNewSheet}
         onConnectExistingSheet={handleConnectExistingSheet}
         onOpenWebhookModal={() => setShowWebhookModal(true)}
+        onOpenDeviceSyncModal={() => setShowDeviceSyncModal(true)}
       />
 
-      {/* پیام تست شناور */}
+      {/* پیام نوتیفیکیشن شناور در بالای صفحه */}
       {notification && (
-        <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300">
-          <div className={`px-4 py-3 rounded-2xl shadow-xl border text-xs font-bold flex items-center gap-2.5 ${
-            notification.type === 'error'
-              ? 'bg-rose-50 text-rose-800 border-rose-200'
-              : notification.type === 'info'
-              ? 'bg-blue-50 text-blue-800 border-blue-200'
-              : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-          }`}>
-            {notification.type === 'error' ? (
-              <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
-            ) : (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-            )}
-            <span>{notification.message}</span>
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 max-w-xl w-[94%] sm:w-auto animate-in fade-in slide-in-from-top-4 duration-300">
+          <div
+            className={`px-4 sm:px-5 py-3.5 rounded-2xl shadow-2xl border text-xs sm:text-sm font-bold flex items-center justify-between gap-3 text-right ${
+              notification.type === 'error'
+                ? 'bg-rose-700 text-white border-rose-500 ring-4 ring-rose-600/20'
+                : notification.type === 'info'
+                ? 'bg-slate-900 text-white border-slate-700 ring-4 ring-slate-800/20'
+                : 'bg-emerald-700 text-white border-emerald-500 ring-4 ring-emerald-600/20'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              {notification.type === 'error' ? (
+                <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
+                  <AlertCircle className="w-5 h-5 text-white" />
+                </div>
+              ) : notification.type === 'info' ? (
+                <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-white" />
+                </div>
+              ) : (
+                <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
+                  <CheckCircle2 className="w-5 h-5 text-white" />
+                </div>
+              )}
+              <span className="leading-snug">{notification.message}</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setNotification(null)}
+              className="p-1 text-white/80 hover:text-white hover:bg-white/20 rounded-lg transition-colors flex-shrink-0 mr-1"
+              title="بستن اعلان"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
       )}
@@ -631,7 +969,34 @@ export default function App() {
       {/* بدنه اصلی */}
       <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5 flex-1">
         
-        {/* بنر آمار و عنوان سامانه */}
+        {/* بنر اعلام خطای ارسال اینترنتی (در صورت وجود موارد ناموفق) */}
+        {failedHousesCount > 0 && (
+          <div className="p-4 sm:p-5 bg-rose-50 border-2 border-rose-300 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm animate-in fade-in duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-rose-600 text-white flex items-center justify-center flex-shrink-0 shadow-xs">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="font-black text-rose-900 text-sm">
+                  {toPersianDigits(failedHousesCount)} مورد به دلیل قطعی یا کندی اینترنت به گوگل شیت ارسال نشد
+                </h4>
+                <p className="text-xs text-rose-700 mt-0.5 leading-relaxed">
+                  اطلاعات روی این دستگاه در حافظه امن است. برای ارسال نهایی به فایل گوگل شیت، دکمه تلاش مجدد را بزنید.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleRetryAllFailed}
+              className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition-all flex-shrink-0"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>ارسال مجدد تمام موارد ({toPersianDigits(failedHousesCount)})</span>
+            </button>
+          </div>
+        )}
+
+        {/* بنر آمار و راهنمای دو دیوایس */}
         <div className="bg-gradient-to-l from-slate-950 via-slate-900 to-emerald-950 text-white rounded-3xl p-6 sm:p-7 shadow-sm relative overflow-hidden">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5 relative z-10">
             <div>
@@ -643,7 +1008,7 @@ export default function App() {
                 دفترچه هوشمند بازدید و خرید مسکن
               </h1>
               <p className="mt-1.5 text-xs text-slate-300 max-w-xl leading-relaxed">
-                ثبت فوری امکانات در حضور مشاور املاک (پارکینگ، آسانسور، انباری، تراس، سند و وام مسکن) و ثبت سطر به سطر در گوگل شیت شما.
+                همگام‌سازی لحظه‌ای با گوگل شیت روی موبایل و لپ‌تاپ. ثبت سریع مشخصات در حضور مشاور املاک (پارکینگ، آسانسور، انباری، تراس، سند و وام).
               </p>
             </div>
 
@@ -694,6 +1059,19 @@ export default function App() {
 
             {/* دکمه‌های عملیات اصلی */}
             <div className="flex items-center gap-2 flex-wrap">
+              {/* دکمه اتصال دیوایس دوم */}
+              {(activeSheet || webhookUrl) && (
+                <button
+                  type="button"
+                  onClick={() => setShowDeviceSyncModal(true)}
+                  className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-800 rounded-xl text-xs font-bold shadow-2xs flex items-center gap-1.5 border border-blue-200 transition-all"
+                  title="اتصال گوشی دوم با QR Code یا لینک اشتراک"
+                >
+                  <Smartphone className="w-3.5 h-3.5 text-blue-600" />
+                  <span>اتصال به گوشی دوم (QR)</span>
+                </button>
+              )}
+
               {/* دکمه مقایسه */}
               {selectedForCompare.length > 0 && (
                 <button
@@ -762,7 +1140,7 @@ export default function App() {
                 </button>
               )}
 
-              {/* دکمه طلایی: ثبت سریع در حضور مشاور املاک */}
+              {/* دکمه اصلی: ثبت سریع در حضور مشاور املاک */}
               <button
                 type="button"
                 onClick={() => {
@@ -834,6 +1212,7 @@ export default function App() {
                       setIsFormOpen(true);
                     }}
                     onDeleteRequest={handleDeleteRequest}
+                    onRetrySync={handleRetrySync}
                     isComparing={selectedForCompare.some(c => c.id === house.id)}
                     onToggleCompare={toggleCompare}
                   />
@@ -844,9 +1223,9 @@ export default function App() {
                 <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-2xl flex items-center justify-center mx-auto">
                   <HomeIcon className="w-6 h-6" />
                 </div>
-                <h3 className="text-base font-bold text-slate-800">هیچ ملکی یافت نشد</h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                  موردی مطابق با فیلترها پیدا نشد. برای ثبت اولین خانه بازدید شده روی دکمه زیر کلیک کنید.
+                <h3 className="text-base font-bold text-slate-800">هیچ ملکی ثبت نشده است</h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                  لیست شما خالی است. با اتصال به گوگل شیت اطلاعات شما بارگذاری می‌شود، یا با زدن دکمه زیر اولین مورد بازدید را ثبت نمایید.
                 </p>
                 <button
                   type="button"
@@ -871,6 +1250,7 @@ export default function App() {
               setIsFormOpen(true);
             }}
             onDelete={handleDeleteRequest}
+            onRetrySync={handleRetrySync}
           />
         )}
       </main>
@@ -896,6 +1276,8 @@ export default function App() {
                 <span>فایل گوگل شیت: {activeSheet.title}</span>
                 <ExternalLink className="w-3 h-3" />
               </a>
+            ) : webhookUrl ? (
+              <span className="text-emerald-700 font-medium">متصل به وب‌هوک گوگل شیت</span>
             ) : (
               <span className="text-slate-400">گوگل شیت هنوز متصل نشده است</span>
             )}
@@ -926,7 +1308,7 @@ export default function App() {
         />
       )}
 
-      {/* ۳. مودال تأییدیه الزامی طبق اصول گوگل ورک‌اسپیس برای عملیات حذفی یا تغییرات شیت */}
+      {/* ۳. مودال تأییدیه الزامی طبق الزامات گوگل ورک‌اسپیس برای عملیات ویرایش یا حذف */}
       <ConfirmationModal
         isOpen={confirmationState.isOpen}
         type={confirmationState.type}
@@ -952,6 +1334,16 @@ export default function App() {
         currentWebhookUrl={webhookUrl || ''}
         onClose={() => setShowWebhookModal(false)}
         onSave={handleSaveWebhook}
+      />
+
+      {/* ۶. مودال اتصال و همگام‌سازی همزمان در چند دیوایس با QR Code و لینک اختصاصی */}
+      <DeviceSyncModal
+        isOpen={showDeviceSyncModal}
+        onClose={() => setShowDeviceSyncModal(false)}
+        spreadsheetId={activeSheet?.id}
+        spreadsheetTitle={activeSheet?.title}
+        spreadsheetUrl={activeSheet?.url}
+        webhookUrl={webhookUrl}
       />
     </div>
   );

@@ -29,6 +29,32 @@ export const HEADERS_FA = [
   'تاریخ بروزرسانی',
 ];
 
+export const isHeaderRow = (row: any[]): boolean => {
+  if (!row || row.length === 0) return false;
+  const col0 = String(row[0] || '').trim();
+  const col1 = String(row[1] || '').trim();
+  const col2 = String(row[2] || '').trim();
+  const col3 = String(row[3] || '').trim();
+  const col4 = String(row[4] || '').trim();
+
+  // اگر ستون قیمت یا متراژ دارای عدد باشد، قطعاً سطر داده است نه سرستون
+  const hasNumericData = /[\d۰-۹]+/.test(col3) || /[\d۰-۹]+/.test(col4);
+  if (hasNumericData && (col3.length < 15 || col4.length < 15)) {
+    return false;
+  }
+
+  // سرستون معمولاً دقیقاً حاوی عناوین مشخص است
+  if (
+    col0 === 'عنوان آگهی دیوار' ||
+    col0 === HEADERS_FA[0] ||
+    (col0.includes('عنوان') && (col1.includes('لینک') || col2.includes('آدرس') || col3.includes('قیمت') || col4.includes('متراژ')))
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
 export const parseSpreadsheetId = (input: string): string => {
   const trimmed = input.trim();
   const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -273,15 +299,34 @@ export const getSpreadsheetDetails = async (
 export const readHouseVisits = async (
   accessToken: string,
   spreadsheetId: string,
-  sheetName: string = SHEET_NAME_VISITS
+  sheetName?: string
 ): Promise<DivarHouseVisit[]> => {
   const cleanId = parseSpreadsheetId(spreadsheetId);
-  const range = `${encodeURIComponent(sheetName)}!A2:X100`;
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}`, {
+  let safeSheet = sheetName || SHEET_NAME_VISITS;
+  // خواندن از سطر اول (A1:Z) تا در صورتی که کاربر سرستون ننوشته باشد یا سطر اول دیتا باشد، هیچ رکوردی از دست نرود
+  let range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A1:Z`);
+
+  let response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}`, {
     headers: {
       'Authorization': `Bearer ${accessToken}`,
     },
   });
+
+  // اگر برگه با نام پیش‌فرض پیدا نشد، اطلاعات اسپردشیت را می‌گیریم تا اولین برگه واقعی را بخوانیم
+  if (!response.ok && response.status === 400 && !sheetName) {
+    try {
+      const details = await getSpreadsheetDetails(accessToken, cleanId);
+      safeSheet = details.sheetName;
+      range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A1:Z`);
+      response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+    } catch (e) {
+      console.warn('Auto fallback to first sheet failed:', e);
+    }
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -289,25 +334,45 @@ export const readHouseVisits = async (
   }
 
   const data = await response.json();
-  const rows = data.values || [];
+  const rows: any[][] = data.values || [];
 
-  return rows
-    .map((row: any[], index: number) => {
-      const rowIndex = index + 2;
-      return rowValuesToHouse(row, rowIndex);
-    })
-    .filter((h: DivarHouseVisit) => (h.title && h.title.trim().length > 0) || (h.address && h.address.trim().length > 0));
+  if (rows.length === 0) {
+    return [];
+  }
+
+  // تشخیص هوشمند سرستون: اگر سطر اول سرستون باشد، دیتا از سطر ۲ شروع می‌شود. در غیر این صورت سطر اول خود دیتا است.
+  const firstRowIsHeader = isHeaderRow(rows[0]);
+  const dataRowsWithIndex: { row: any[]; rowIndex: number }[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    if (i === 0 && firstRowIsHeader) {
+      continue;
+    }
+    const rowIndex = i + 1; // شماره سطر واقعی در گوگل شیت
+    dataRowsWithIndex.push({ row: rows[i], rowIndex });
+  }
+
+  return dataRowsWithIndex
+    .map(({ row, rowIndex }) => rowValuesToHouse(row, rowIndex))
+    .filter((h: DivarHouseVisit) => 
+      (h.title && h.title.trim().length > 0) || 
+      (h.address && h.address.trim().length > 0) || 
+      (h.totalPriceMillion > 0) || 
+      (h.divarUrl && h.divarUrl.trim().length > 0) ||
+      (h.realEstateAgentPhone && h.realEstateAgentPhone.trim().length > 0)
+    );
 };
 
 export const addHouseVisit = async (
   accessToken: string,
   spreadsheetId: string,
   house: DivarHouseVisit,
-  sheetName: string = SHEET_NAME_VISITS
-): Promise<{ updatedRange: string }> => {
+  sheetName?: string
+): Promise<{ updatedRange: string; rowIndex?: number }> => {
   const cleanId = parseSpreadsheetId(spreadsheetId);
   const rowValues = houseToRowValues(house);
-  const range = `${encodeURIComponent(sheetName)}!A:X`;
+  const safeSheet = sheetName || SHEET_NAME_VISITS;
+  const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A:X`);
 
   const response = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}:append?valueInputOption=USER_ENTERED`,
@@ -318,7 +383,7 @@ export const addHouseVisit = async (
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        range,
+        range: `'${safeSheet.replace(/'/g, "''")}'!A:X`,
         majorDimension: 'ROWS',
         values: [rowValues],
       }),
@@ -331,7 +396,14 @@ export const addHouseVisit = async (
   }
 
   const data = await response.json();
-  return { updatedRange: data.updates?.updatedRange || '' };
+  const updatedRange = data.updates?.updatedRange || '';
+  let rowIndex: number | undefined;
+  const match = updatedRange.match(/!A(\d+):/i);
+  if (match && match[1]) {
+    rowIndex = parseInt(match[1], 10);
+  }
+
+  return { updatedRange, rowIndex };
 };
 
 export const updateHouseVisit = async (
@@ -339,11 +411,12 @@ export const updateHouseVisit = async (
   spreadsheetId: string,
   rowIndex: number,
   house: DivarHouseVisit,
-  sheetName: string = SHEET_NAME_VISITS
+  sheetName?: string
 ): Promise<void> => {
   const cleanId = parseSpreadsheetId(spreadsheetId);
   const rowValues = houseToRowValues(house);
-  const range = `${encodeURIComponent(sheetName)}!A${rowIndex}:X${rowIndex}`;
+  const safeSheet = sheetName || SHEET_NAME_VISITS;
+  const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A${rowIndex}:X${rowIndex}`);
 
   const response = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}?valueInputOption=USER_ENTERED`,
@@ -354,7 +427,7 @@ export const updateHouseVisit = async (
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        range,
+        range: `'${safeSheet.replace(/'/g, "''")}'!A${rowIndex}:X${rowIndex}`,
         majorDimension: 'ROWS',
         values: [rowValues],
       }),
@@ -371,9 +444,33 @@ export const deleteHouseVisit = async (
   accessToken: string,
   spreadsheetId: string,
   rowIndex: number,
-  sheetId: number = 0
+  sheetId?: number,
+  sheetName?: string
 ): Promise<void> => {
   const cleanId = parseSpreadsheetId(spreadsheetId);
+
+  // استخراج خودکار و تضمین شده sheetId عددی صحیح از اسپردشیت برای جلوگیری از خطای Invalid sheet ID
+  let targetSheetId: number | undefined = sheetId;
+  try {
+    const metaResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cleanId}`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+    if (metaResponse.ok) {
+      const meta = await metaResponse.json();
+      const sheetsList = meta.sheets || [];
+      const safeSheet = sheetName || SHEET_NAME_VISITS;
+      const matched = sheetsList.find((s: any) => s.properties?.title === safeSheet) || sheetsList[0];
+      if (matched?.properties?.sheetId !== undefined) {
+        targetSheetId = matched.properties.sheetId;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to query metadata for sheetId:', e);
+  }
+
+  const finalSheetId = targetSheetId !== undefined ? targetSheetId : 0;
   const startIndex = rowIndex - 1;
   const endIndex = rowIndex;
 
@@ -390,7 +487,7 @@ export const deleteHouseVisit = async (
           {
             deleteDimension: {
               range: {
-                sheetId,
+                sheetId: finalSheetId,
                 dimension: 'ROWS',
                 startIndex,
                 endIndex,
