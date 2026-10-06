@@ -367,30 +367,8 @@ export const addHouseVisit = async (
   const rowValues = houseToRowValues(house);
   const safeSheet = sheetName || SHEET_NAME_VISITS;
 
-  // ردیف ۱ باید حتماً Header باشد؛ در غیر این صورت append ممکن است اولین داده را در ردیف ۱ بنویسد.
-  const headerRange = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A1:X1`);
-  const headerResponse = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${headerRange}`,
-    {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-      },
-    }
-  );
-
-  if (!headerResponse.ok) {
-    const errorText = await headerResponse.text();
-    throw new Error(`خطا در بررسی Header گوگل شیت: ${headerResponse.status} ${errorText}`);
-  }
-
-  const headerData = await headerResponse.json();
-  const currentHeader = headerData.values?.[0] || [];
-  const headerMatches = HEADERS_FA.every((header, index) => currentHeader[index] === header);
-
-  if (!headerMatches) {
-    throw new Error('Header گوگل شیت با ساختار مورد انتظار برنامه مطابقت ندارد. ردیف اول را طبق Header برنامه تنظیم کنید.');
-  }
-
+  // ردیف ۱ همیشه Header است. Append را از A2 شروع می‌کنیم تا حتی در شیت خالی
+  // هم هیچ‌وقت داده‌ای در ردیف Header نوشته نشود.
   const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:X`);
 
   const response = await fetch(
@@ -402,7 +380,7 @@ export const addHouseVisit = async (
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        range: `'${safeSheet.replace(/'/g, "''")}'!A:X`,
+        range: `'${safeSheet.replace(/'/g, "''")}'!A2:X`,
         majorDimension: 'ROWS',
         values: [rowValues],
       }),
@@ -420,6 +398,10 @@ export const addHouseVisit = async (
   const match = updatedRange.match(/!A(\d+):/i);
   if (match && match[1]) {
     rowIndex = parseInt(match[1], 10);
+  }
+
+  if (rowIndex !== undefined && rowIndex < 2) {
+    throw new Error('گوگل شیت تلاش کرد داده را در ردیف Header بنویسد؛ عملیات متوقف شد.');
   }
 
   return { updatedRange, rowIndex };
