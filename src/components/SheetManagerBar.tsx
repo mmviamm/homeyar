@@ -89,14 +89,14 @@ export const SheetManagerBar: React.FC<SheetManagerBarProps> = ({
   };
 
   return (
-    <div className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-2xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+    <div className="bg-white border-b border-slate-200 lg:sticky lg:top-0 z-30 shadow-2xs">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2 lg:py-3">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 lg:gap-3">
           
           {/* سمت راست: لوگو و وضعیت اتصال */}
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-emerald-600 flex items-center justify-center text-white shadow-xs flex-shrink-0">
-              <FileSpreadsheet className="w-6 h-6" />
+            <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-xl lg:rounded-2xl bg-emerald-600 flex items-center justify-center text-white shadow-xs flex-shrink-0">
+              <FileSpreadsheet className="w-5 h-5 lg:w-6 lg:h-6" />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -124,7 +124,7 @@ export const SheetManagerBar: React.FC<SheetManagerBarProps> = ({
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-500 font-medium truncate max-w-md">
+              <p className="hidden sm:block text-xs text-slate-500 font-medium truncate max-w-md">
                 {webhookUrl
                   ? 'داده‌ها به صورت زنده و دوطرفه با گوگل شیت همگام هستند'
                   : activeSheet 
