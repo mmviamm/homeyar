@@ -27,7 +27,27 @@ export const HEADERS_FA = [
   'نظر و ارزیابی',
   'وضعیت فرآیند خرید',
   'تاریخ بروزرسانی',
+  'شناسه یکتا (UUID)',
 ];
+
+// آخرین ستون داده‌ها (ستون ۲۵م = Y)
+export const LAST_COLUMN = 'Y';
+
+export const generateUid = (): string => {
+  if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
+    return (crypto as any).randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+};
+
+/**
+ * امضای محتوای یک ملک (بدون تاریخ بروزرسانی و uid) برای مقایسه‌ی دقیق محتوای دو ردیف.
+ */
+export const houseContentKey = (house: DivarHouseVisit): string =>
+  JSON.stringify(houseToRowValues({ ...house, uid: '' }).slice(0, 23));
 
 export const isHeaderRow = (row: any[]): boolean => {
   if (!row || row.length === 0) return false;
@@ -120,6 +140,7 @@ export const houseToRowValues = (house: DivarHouseVisit): (string | number)[] =>
     house.reviewText || '',
     house.visitStatus || 'در انتظار تماس',
     new Date().toLocaleDateString('fa-IR'),
+    house.uid || '',
   ];
 };
 
@@ -141,6 +162,8 @@ export const rowValuesToHouse = (row: any[], rowIndex: number): DivarHouseVisit 
   const parseString = (val: any): string => (val !== undefined && val !== null ? String(val).trim() : '');
   const parseBool = (val: any): boolean => {
     const s = parseString(val).toLowerCase();
+    // «ندارد» شامل کلمه «دارد» است؛ باید قبل از بررسی «دارد» به‌صورت جداگانه false شود
+    if (s.includes('ندارد') || s === 'خیر' || s === 'نه' || s === 'false' || s === 'no' || s === '0') return false;
     return s.includes('دارد') || s === 'بله' || s === 'true' || s === 'yes' || s === '1';
   };
 
@@ -156,8 +179,12 @@ export const rowValuesToHouse = (row: any[], rowIndex: number): DivarHouseVisit 
     floor = parseNum(row[6]) || 1;
   }
 
+  const uid = parseString(row[24]);
+
   return {
-    id: `house-row-${rowIndex}`,
+    // اگر uid ثبت شده باشد، شناسه‌ی ملک ثابت است و با جابجایی ردیف‌ها تغییر نمی‌کند
+    id: uid || `house-row-${rowIndex}`,
+    uid: uid || undefined,
     rowIndex,
     title: parseString(row[0]) || `ملک ردیف ${rowIndex}`,
     divarUrl: parseString(row[1]),
@@ -230,7 +257,7 @@ export const createHouseHuntingSpreadsheet = async (
 
   // نوشتن ردیف عنوان‌ها در گوگل شیت
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(SHEET_NAME_VISITS)}!A1:X1?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(SHEET_NAME_VISITS)}!A1:${LAST_COLUMN}1?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -238,7 +265,7 @@ export const createHouseHuntingSpreadsheet = async (
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        range: `${SHEET_NAME_VISITS}!A1:X1`,
+        range: `${SHEET_NAME_VISITS}!A1:${LAST_COLUMN}1`,
         majorDimension: 'ROWS',
         values: [HEADERS_FA],
       }),
@@ -330,7 +357,7 @@ export const readHouseVisits = async (
   const cleanId = parseSpreadsheetId(spreadsheetId);
   let safeSheet = sheetName || SHEET_NAME_VISITS;
   // ردیف ۱ همیشه Header است و هرگز نباید به عنوان رکورد خوانده شود.
-  let range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:X`);
+  let range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:${LAST_COLUMN}`);
 
   let response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}`, {
     headers: {
@@ -343,7 +370,7 @@ export const readHouseVisits = async (
     try {
       const details = await getSpreadsheetDetails(accessToken, cleanId);
       safeSheet = details.sheetName;
-      range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:X`);
+      range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:${LAST_COLUMN}`);
       response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}`, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -366,7 +393,7 @@ export const readHouseVisits = async (
     return [];
   }
 
-  // چون خواندن از A2:X انجام شده، اولین داده این آرایه مربوط به ردیف ۲ شیت است.
+  // چون خواندن از A2:Y انجام شده، اولین داده این آرایه مربوط به ردیف ۲ شیت است.
   const dataRowsWithIndex = rows.map((row, index) => ({
     row,
     rowIndex: index + 2,
@@ -395,7 +422,7 @@ export const addHouseVisit = async (
 
   // ردیف ۱ همیشه Header است. Append را از A2 شروع می‌کنیم تا حتی در شیت خالی
   // هم هیچ‌وقت داده‌ای در ردیف Header نوشته نشود.
-  const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:X`);
+  const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:${LAST_COLUMN}`);
 
   const response = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}:append?valueInputOption=USER_ENTERED`,
@@ -406,7 +433,7 @@ export const addHouseVisit = async (
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        range: `'${safeSheet.replace(/'/g, "''")}'!A2:X`,
+        range: `'${safeSheet.replace(/'/g, "''")}'!A2:${LAST_COLUMN}`,
         majorDimension: 'ROWS',
         values: [rowValues],
       }),
@@ -447,7 +474,7 @@ export const updateHouseVisit = async (
   const cleanId = parseSpreadsheetId(spreadsheetId);
   const rowValues = houseToRowValues(house);
   const safeSheet = sheetName || SHEET_NAME_VISITS;
-  const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A${rowIndex}:X${rowIndex}`);
+  const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A${rowIndex}:${LAST_COLUMN}${rowIndex}`);
 
   const response = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}?valueInputOption=USER_ENTERED`,
@@ -458,7 +485,7 @@ export const updateHouseVisit = async (
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        range: `'${safeSheet.replace(/'/g, "''")}'!A${rowIndex}:X${rowIndex}`,
+        range: `'${safeSheet.replace(/'/g, "''")}'!A${rowIndex}:${LAST_COLUMN}${rowIndex}`,
         majorDimension: 'ROWS',
         values: [rowValues],
       }),

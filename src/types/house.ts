@@ -68,7 +68,13 @@ export interface DivarHouseVisit {
   // وضعیت همگام‌سازی با گوگل شیت
   syncStatus?: 'synced' | 'pending' | 'failed';
   syncError?: string;
-  
+  // شناسه یکتای ثابت (UUID) که در ستون Y شیت ذخیره می‌شود؛ برای یافتن دقیق ردیف در ویرایش/حذف/تلاش مجدد
+  uid?: string;
+  // نوع عملیاتی که ناموفق مانده است؛ تلاش مجدد بر اساس همین تصمیم می‌گیرد ویرایش کند یا ردیف جدید بسازد
+  pendingOp?: 'create' | 'update';
+  // نسخه قبل از ویرایش (برای پیدا کردن ردیف قدیمی رکوردهای بدون uid)
+  retryBase?: DivarHouseVisit;
+
   updatedAt?: string;
 }
 

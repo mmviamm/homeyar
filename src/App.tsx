@@ -38,6 +38,8 @@ import {
   updateHouseVisit, 
   deleteHouseVisit, 
   parseSpreadsheetId,
+  generateUid,
+  houseContentKey,
 } from './services/sheetsService';
 import { 
   toPersianDigits, 
@@ -57,8 +59,8 @@ import { AppsScriptWebhookModal } from './components/AppsScriptWebhookModal';
 import { DeviceSyncModal } from './components/DeviceSyncModal';
 import { 
   appendViaWebhook, 
-  updateViaWebhook, 
-  deleteViaWebhook, 
+  updateViaWebhookVerified, 
+  deleteViaWebhookVerified, 
   fetchViaWebhook 
 } from './services/webhookService';
 
@@ -228,6 +230,8 @@ export default function App() {
   const deleteInProgressRef = React.useRef<boolean>(false);
   // قفل همزمانی ویرایش برای جلوگیری از ارسال چند update با یک rowIndex قدیمی.
   const updateInProgressRef = React.useRef<boolean>(false);
+  // قفل تلاش مجدد برای هر ملک؛ دوبار کلیک روی «تلاش مجدد» هرگز دو درخواست نمی‌فرستد.
+  const retryInProgressRef = React.useRef<Set<string>>(new Set());
 
   const showNotification = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     if (notificationTimerRef.current) {
@@ -259,8 +263,15 @@ export default function App() {
         continue;
       }
 
+      // ویرایشِ ناموفق هنوز روی شیت اعمال نشده؛ باید همراه دکمه تلاش مجدد باقی بماند.
+      if (local.pendingOp === 'update') {
+        keptUnsynced.push(local);
+        continue;
+      }
+
       // برای موارد failed، اگر دقیقاً در شیت آمده باشد یعنی ثبت شده، در غیر این صورت باید باقی بماند
       const foundInRemote = remoteSynced.some(rem => {
+        if (local.uid && rem.uid && local.uid === rem.uid) return true;
         if (local.divarUrl && local.divarUrl.trim() && rem.divarUrl && rem.divarUrl.trim()) {
           if (local.divarUrl.trim() === rem.divarUrl.trim()) return true;
         }
@@ -289,8 +300,18 @@ export default function App() {
     }
 
     for (const h of remoteSynced) {
+      // نسخه‌ی قدیمیِ ردیفی که ویرایش ناموفقش محلی نگه داشته شده، دوباره نمایش داده نمی‌شود.
+      const replacedByFailedEdit = keptUnsynced.some(k => {
+        if (k.pendingOp !== 'update') return false;
+        if (k.uid && h.uid) return k.uid === h.uid;
+        const base = k.retryBase || k;
+        return !h.uid && getHouseIdentityKey(base) === getHouseIdentityKey(h);
+      });
+      if (replacedByFailedEdit) continue;
+
       const hasPendingMatch = keptUnsynced.some(k => 
         k.syncStatus === 'pending' && (
+          (k.uid && h.uid && k.uid === h.uid) ||
           (k.divarUrl && k.divarUrl.trim() === h.divarUrl.trim()) ||
           (k.title.trim() === h.title.trim() && (k.address || '').trim() === (h.address || '').trim())
         )
@@ -563,14 +584,15 @@ export default function App() {
   // ۱۲. ذخیره ملک با پیگیری دقیق وضعیت همگام‌سازی و خطایابی اینترنت
   const handleSaveHouseForm = async (houseData: DivarHouseVisit) => {
     const currentToken = token || (await getAccessToken());
-    const isUpdating = Boolean(editingHouse && editingHouse.rowIndex);
+    const isUpdating = Boolean(editingHouse && editingHouse.rowIndex && editingHouse.pendingOp !== 'create');
 
     setIsFormOpen(false);
     setEditingHouse(null);
 
     // حالت الف: ویرایش ملک موجود
     if (isUpdating && editingHouse) {
-      const originalHouse = editingHouse;
+      // اگر در حال ویرایش یک ویرایشِ ناموفق هستیم، ردیف اصلی با نسخه‌ی قبل از ویرایش پیدا می‌شود.
+      const originalHouse = editingHouse.retryBase || editingHouse;
 
       setConfirmationState({
         isOpen: true,
@@ -596,6 +618,8 @@ export default function App() {
           updateInProgressRef.current = true;
           setConfirmationState(prev => ({ ...prev, isLoading: true }));
           inFlightMutationsRef.current += 1;
+          // uid یک بار ساخته می‌شود تا حتی اگر تلاش اول ناموفق شد، تلاش مجدد همان شناسه را بنویسد.
+          const stableUid = houseData.uid || originalHouse.uid || generateUid();
 
           try {
             const updateToken = currentToken;
@@ -607,8 +631,12 @@ export default function App() {
                 activeSheet.id,
                 activeSheet.sheetName
               );
-              const currentRowIndex = await resolveCurrentRowIndex(remoteHouses, originalHouse);
-              const updatedHouse = { ...houseData, rowIndex: currentRowIndex };
+              const currentRowIndex = await resolveCurrentRowIndex(
+                remoteHouses,
+                { ...originalHouse, uid: originalHouse.uid || houseData.uid },
+                originalHouse
+              );
+              const updatedHouse = { ...houseData, uid: stableUid, rowIndex: currentRowIndex };
 
               await updateHouseVisit(
                 updateToken,
@@ -620,7 +648,7 @@ export default function App() {
 
               setHouses(prev => prev.map(h =>
                 h.id === houseData.id
-                  ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined }
+                  ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined, pendingOp: undefined, retryBase: undefined }
                   : h
               ));
               setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
@@ -628,14 +656,18 @@ export default function App() {
               await syncFromSheet(updateToken, activeSheet.id, activeSheet.sheetName);
             } else if (webhookUrl) {
               const remoteHouses = await fetchViaWebhook(webhookUrl);
-              const currentRowIndex = await resolveCurrentRowIndex(remoteHouses, originalHouse);
-              const updatedHouse = { ...houseData, rowIndex: currentRowIndex };
+              const currentRowIndex = await resolveCurrentRowIndex(
+                remoteHouses,
+                { ...originalHouse, uid: originalHouse.uid || houseData.uid },
+                originalHouse
+              );
+              const updatedHouse = { ...houseData, uid: stableUid, rowIndex: currentRowIndex };
 
-              await updateViaWebhook(webhookUrl, currentRowIndex, updatedHouse);
+              await updateViaWebhookVerified(webhookUrl, currentRowIndex, updatedHouse);
 
               setHouses(prev => prev.map(h =>
                 h.id === houseData.id
-                  ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined }
+                  ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined, pendingOp: undefined, retryBase: undefined }
                   : h
               ));
               setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
@@ -661,7 +693,7 @@ export default function App() {
             console.error('Update error:', err);
             setHouses(prev => prev.map(h =>
               h.id === houseData.id
-                ? { ...houseData, syncStatus: 'failed' as const, syncError: errorMsg }
+                ? { ...houseData, uid: stableUid, pendingOp: 'update' as const, retryBase: originalHouse, syncStatus: 'failed' as const, syncError: errorMsg }
                 : h
             ));
             setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
@@ -688,17 +720,21 @@ export default function App() {
     }
 
     // حالت ب: ثبت ملک جدید
-    const tempId = houseData.id || `house-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const newUid = houseData.uid || generateUid();
+    const tempId = houseData.id || newUid;
     const nextRow = (houses.length > 0 ? Math.max(...houses.map(h => h.rowIndex || 0)) : 0) + 1;
     const pendingHouse: DivarHouseVisit = {
       ...houseData,
       id: tempId,
+      uid: newUid,
       rowIndex: nextRow,
+      pendingOp: 'create',
+      retryBase: undefined,
       syncStatus: 'pending',
     };
 
     // فوراً در رابط کاربری نمایش بده تا کاربر معطل نشود - هرگز غیب نمی‌شود
-    setHouses(prev => [pendingHouse, ...prev]);
+    setHouses(prev => [pendingHouse, ...prev.filter(h => h.id !== tempId)]);
     inFlightMutationsRef.current += 1;
 
     try {
@@ -708,7 +744,7 @@ export default function App() {
         const assignedRow = res.rowIndex || nextRow;
         setHouses(prev =>
           prev.map(h =>
-            h.id === tempId ? { ...h, syncStatus: 'synced', rowIndex: assignedRow, syncError: undefined } : h
+            h.id === tempId ? { ...h, syncStatus: 'synced', rowIndex: assignedRow, syncError: undefined, pendingOp: undefined } : h
           )
         );
         showNotification(`ملک "${houseData.title || houseData.address}" با موفقیت در گوگل شیت ثبت شد.`);
@@ -721,7 +757,7 @@ export default function App() {
         const res = await appendViaWebhook(webhookUrl, pendingHouse);
         setHouses(prev =>
           prev.map(h =>
-            h.id === tempId ? { ...h, syncStatus: 'synced', rowIndex: res.rowIndex || h.rowIndex, syncError: undefined } : h
+            h.id === tempId ? { ...h, syncStatus: 'synced', rowIndex: res.rowIndex || h.rowIndex, syncError: undefined, pendingOp: undefined } : h
           )
         );
         showNotification(`ملک "${houseData.title || houseData.address}" با موفقیت در گوگل شیت ثبت شد.`);
@@ -746,7 +782,7 @@ export default function App() {
       console.error('Append error:', err);
       // ملک در رابط کاربری باقی می‌ماند و دکمه تلاش مجدد فعال می‌شود
       setHouses(prev =>
-        prev.map(h => (h.id === tempId ? { ...h, syncStatus: 'failed', syncError: errorMsg } : h))
+        prev.map(h => (h.id === tempId ? { ...h, syncStatus: 'failed', syncError: errorMsg, pendingOp: 'create' } : h))
       );
       showNotification(errorMsg, 'error');
     } finally {
@@ -754,55 +790,109 @@ export default function App() {
     }
   };
 
-  // ۱۳. تابع تلاش مجدد برای ارسال ملکی که با خطا مواجه شده بود
+  // ۱۳. تلاش مجدد برای ملکی که با خطا مواجه شده بود.
+  // نکته مهم: تصمیم «ویرایش یا ردیف جدید» از روی house.pendingOp گرفته می‌شود (نه از روی id)،
+  // و قبل از هر نوشتن، شیت خوانده می‌شود تا تلاش مجدد هرگز ردیف تکراری نسازد.
   const handleRetrySync = async (house: DivarHouseVisit) => {
+    if (retryInProgressRef.current.has(house.id)) return;
+    retryInProgressRef.current.add(house.id);
+
     setHouses(prev => prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'pending' as const, syncError: undefined } : h)));
     showNotification(`در حال تلاش مجدد برای ارسال ملک "${house.title || house.address}" به گوگل شیت...`, 'info');
 
     inFlightMutationsRef.current += 1;
-    const currentToken = token || (await getAccessToken());
+    const op: 'create' | 'update' = house.pendingOp ?? (house.id.startsWith('house-row-') ? 'update' : 'create');
+    const uid = house.uid || house.retryBase?.uid || generateUid();
+    const toWrite: DivarHouseVisit = { ...house, uid };
 
     try {
-      if (activeSheet && currentToken) {
-        if (house.rowIndex && house.rowIndex >= 1 && !house.id.startsWith('house-')) {
-          await updateHouseVisit(currentToken, activeSheet.id, house.rowIndex, house, activeSheet.sheetName);
-        } else {
-          const res = await addHouseVisit(currentToken, activeSheet.id, house, activeSheet.sheetName);
-          if (res.rowIndex) house.rowIndex = res.rowIndex;
-        }
-        setHouses(prev =>
-          prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'synced' as const, syncError: undefined } : h))
-        );
-        showNotification(`ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
-        await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
-      } else if (webhookUrl) {
-        if (house.rowIndex && house.rowIndex >= 1 && !house.id.startsWith('house-')) {
-          await updateViaWebhook(webhookUrl, house.rowIndex, house);
-        } else {
-          const res = await appendViaWebhook(webhookUrl, house);
-          if (res.rowIndex) house.rowIndex = res.rowIndex;
-        }
-        setHouses(prev =>
-          prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'synced' as const, syncError: undefined } : h))
-        );
-        showNotification(`ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
-        try {
-          const fresh = await fetchViaWebhook(webhookUrl);
-          setHouses(prev => mergeRemoteWithLocal(prev, fresh));
-        } catch (e) {}
-      } else {
+      const currentToken = token || (await getAccessToken());
+      const useApi = Boolean(activeSheet && currentToken);
+
+      if (!useApi && !webhookUrl) {
         setHouses(prev =>
           prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'failed' as const, syncError: 'گوگل شیت متصل نیست' } : h))
         );
         showNotification('برای ارسال به گوگل شیت، ابتدا از نوار بالا شیت را متصل نمایید.', 'error');
+        return;
+      }
+
+      // وضعیت واقعی شیت؛ تصمیم‌گیری فقط بر اساس همین است
+      const remote = useApi
+        ? await readHouseVisits(currentToken as string, activeSheet!.id, activeSheet!.sheetName)
+        : await fetchViaWebhook(webhookUrl as string);
+
+      let savedRow: number | undefined;
+
+      if (op === 'update') {
+        const rowIndex = await resolveCurrentRowIndex(
+          remote,
+          { ...toWrite, uid: house.uid || house.retryBase?.uid },
+          house.retryBase || house
+        );
+        const current = remote.find(r => r.rowIndex === rowIndex);
+        const alreadyApplied = Boolean(
+          current && current.uid === uid && houseContentKey(current) === houseContentKey(toWrite)
+        );
+        if (!alreadyApplied) {
+          const updated = { ...toWrite, rowIndex };
+          if (useApi) {
+            await updateHouseVisit(currentToken as string, activeSheet!.id, rowIndex, updated, activeSheet!.sheetName);
+          } else {
+            await updateViaWebhookVerified(webhookUrl as string, rowIndex, updated);
+          }
+        }
+        savedRow = rowIndex;
+      } else {
+        // ثبت جدید: اگر تلاش قبلی در واقع انجام شده بود (مثلاً تایم‌اوت بعد از ثبت)، ردیف با همین uid در شیت هست.
+        const existing = remote.find(r => r.uid === uid);
+        if (existing) {
+          savedRow = existing.rowIndex;
+        } else if (useApi) {
+          const res = await addHouseVisit(currentToken as string, activeSheet!.id, toWrite, activeSheet!.sheetName);
+          savedRow = res.rowIndex;
+        } else {
+          const res = await appendViaWebhook(webhookUrl as string, toWrite);
+          savedRow = res.rowIndex;
+        }
+      }
+
+      setHouses(prev =>
+        prev.map(h =>
+          h.id === house.id
+            ? {
+                ...toWrite,
+                rowIndex: savedRow ?? toWrite.rowIndex,
+                syncStatus: 'synced' as const,
+                syncError: undefined,
+                pendingOp: undefined,
+                retryBase: undefined,
+              }
+            : h
+        )
+      );
+      showNotification(`ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
+
+      if (useApi) {
+        await syncFromSheet(currentToken as string, activeSheet!.id, activeSheet!.sheetName);
+      } else {
+        try {
+          const fresh = await fetchViaWebhook(webhookUrl as string);
+          setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+        } catch (e) {}
       }
     } catch (err: any) {
       const errorMsg = getNormalizedErrorMessage(err);
       setHouses(prev =>
-        prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'failed' as const, syncError: errorMsg } : h))
+        prev.map(h =>
+          h.id === house.id
+            ? { ...h, uid, pendingOp: op, syncStatus: 'failed' as const, syncError: errorMsg }
+            : h
+        )
       );
       showNotification(errorMsg, 'error');
     } finally {
+      retryInProgressRef.current.delete(house.id);
       inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
     }
   };
@@ -824,32 +914,57 @@ export default function App() {
     return `title-address:${(house.title || '').trim()}|${(house.address || '').trim()}`;
   };
 
-  // قبل از حذف، rowIndex فعلی را از روی محتوای واقعی شیت پیدا می‌کنیم.
-  // اگر rowIndex قدیمی باشد، هرگز به‌صورت کورکورانه ردیف دیگری را حذف نمی‌کنیم.
+  // rowIndex فعلی را از روی محتوای واقعی شیت پیدا می‌کنیم (نه از روی شماره‌ای که ممکن است کهنه باشد).
+  // اولویت با شناسه یکتا (uid) است. فقط رکوردهای قدیمی بدون uid با عنوان/آدرس/لینک پیدا می‌شوند.
   const resolveCurrentRowIndex = async (
     remoteHouses: DivarHouseVisit[],
-    house: DivarHouseVisit
+    house: DivarHouseVisit,
+    legacyBase: DivarHouseVisit = house
   ): Promise<number> => {
-    const identity = getHouseIdentityKey(house);
-
-    const matches = remoteHouses.filter(remote => getHouseIdentityKey(remote) === identity);
-
-    if (house.rowIndex) {
-      const rowAtExpectedIndex = remoteHouses.find(remote => remote.rowIndex === house.rowIndex);
-      if (rowAtExpectedIndex && getHouseIdentityKey(rowAtExpectedIndex) === identity) {
-        return house.rowIndex;
+    // ۱) تطبیق دقیق با uid
+    if (house.uid) {
+      const byUid = remoteHouses.filter(remote => remote.uid === house.uid && remote.rowIndex);
+      if (byUid.length > 0) {
+        const atExpected = byUid.find(remote => remote.rowIndex === house.rowIndex);
+        return (atExpected || byUid[0]).rowIndex as number;
       }
     }
 
-    if (matches.length === 1 && matches[0].rowIndex) {
-      return matches[0].rowIndex;
-    }
-
-    if (matches.length === 0) {
+    // ملکی که uid دارد و از ابتدا با uid ساخته شده (id همان uid است) هرگز با تطبیق متنی حدس زده نمی‌شود؛
+    // وگرنه ممکن است ردیف یک ملک دیگر با عنوان مشابه اشتباهاً ویرایش/حذف شود.
+    if (!house.id.startsWith('house-row-')) {
       throw new Error('این ملک دیگر در گوگل شیت پیدا نشد. اطلاعات برنامه با شیت همگام‌سازی می‌شود.');
     }
 
-    throw new Error('چند رکورد مشابه در گوگل شیت پیدا شد؛ برای جلوگیری از حذف اشتباه، عملیات متوقف شد.');
+    // ۲) رکوردهای قدیمی (بدون uid): تطبیق با عنوان/آدرس/لینک فقط بین ردیف‌های بدون uid
+    const identity = getHouseIdentityKey(legacyBase);
+    const legacy = remoteHouses.filter(remote => !remote.uid && getHouseIdentityKey(remote) === identity);
+
+    if (legacy.length === 0) {
+      throw new Error('این ملک دیگر در گوگل شیت پیدا نشد. اطلاعات برنامه با شیت همگام‌سازی می‌شود.');
+    }
+
+    const expected = legacyBase.rowIndex ?? house.rowIndex;
+    if (expected) {
+      const atExpected = legacy.find(remote => remote.rowIndex === expected);
+      if (atExpected) return expected;
+    }
+
+    if (legacy.length === 1 && legacy[0].rowIndex) {
+      return legacy[0].rowIndex;
+    }
+
+    // چند ردیف کاملاً یکسان (مثلاً تکراری‌های قبلی): هر کدام معادل دیگری است؛ نزدیک‌ترین ردیف را انتخاب می‌کنیم.
+    const sameContent = new Set(legacy.map(houseContentKey)).size === 1;
+    if (sameContent) {
+      const target = expected ?? legacy[0].rowIndex ?? 0;
+      const closest = [...legacy].sort(
+        (a, b) => Math.abs((a.rowIndex || 0) - target) - Math.abs((b.rowIndex || 0) - target)
+      )[0];
+      if (closest.rowIndex) return closest.rowIndex;
+    }
+
+    throw new Error('چند رکورد مشابه در گوگل شیت پیدا شد؛ برای جلوگیری از اشتباه، عملیات متوقف شد.');
   };
 
   // ۱۴. حذف مورد با تأییدیه الزامی کاربر و اجرای دقیق روی گوگل شیت
@@ -916,7 +1031,7 @@ export default function App() {
             const remoteHouses = await fetchViaWebhook(webhookUrl);
             const currentRowIndex = await resolveCurrentRowIndex(remoteHouses, house);
 
-            await deleteViaWebhook(webhookUrl, currentRowIndex);
+            await deleteViaWebhookVerified(webhookUrl, currentRowIndex, remoteHouses);
 
             setHouses(prev => prev.filter(h =>
               h.id !== house.id &&

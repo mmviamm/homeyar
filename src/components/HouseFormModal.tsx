@@ -31,7 +31,7 @@ import {
   formatVerbalPriceMillion, 
   calculatePricePerMeter 
 } from '../utils/persianUtils';
-import { normalizePhone } from '../services/sheetsService';
+import { normalizePhone, generateUid } from '../services/sheetsService';
 
 interface HouseFormModalProps {
   isOpen: boolean;
@@ -74,9 +74,9 @@ export const HouseFormModal: React.FC<HouseFormModalProps> = ({
   onSubmit,
   isLoading = false,
 }) => {
-  const [formData, setFormData] = useState<DivarHouseVisit>({
-    id: `house-${Date.now()}`,
-    ...DEFAULT_HOUSE,
+  const [formData, setFormData] = useState<DivarHouseVisit>(() => {
+    const uid = generateUid();
+    return { id: uid, uid, ...DEFAULT_HOUSE };
   });
 
   const [entryMode, setEntryMode] = useState<'quick' | 'full'>('quick');
@@ -86,8 +86,10 @@ export const HouseFormModal: React.FC<HouseFormModalProps> = ({
     if (initialHouse) {
       setFormData(initialHouse);
     } else {
+      const uid = generateUid();
       setFormData({
-        id: `house-${Date.now()}`,
+        id: uid,
+        uid,
         ...DEFAULT_HOUSE,
         title: '',
         address: '',

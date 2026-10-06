@@ -1,5 +1,5 @@
 import { DivarHouseVisit } from '../types/house';
-import { HEADERS_FA, houseToRowValues, rowValuesToHouse, isHeaderRow } from './sheetsService';
+import { HEADERS_FA, houseToRowValues, rowValuesToHouse, isHeaderRow, houseContentKey } from './sheetsService';
 
 export const APPS_SCRIPT_TEMPLATE = `function doGet(e) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
@@ -11,7 +11,7 @@ export const APPS_SCRIPT_TEMPLATE = `function doGet(e) {
       "قیمت هر متر (میلیون تومان)", "طبقه / کل طبقات", "سال ساخت", "تعداد اتاق", "پارکینگ",
       "آسانسور", "انباری", "تراس", "وضعیت سند", "صاحب‌خانه منتظر وام مسکن می‌ماند؟",
       "تماس با املاک جواب داد؟", "آدرس مشاور املاک", "شماره تماس مشاور املاک", "مکان قرار بازدید",
-      "زمان قرار بازدید", "امتیاز از ۱۰", "نظر و ارزیابی", "وضعیت فرآیند خرید", "تاریخ بروزرسانی"
+      "زمان قرار بازدید", "امتیاز از ۱۰", "نظر و ارزیابی", "وضعیت فرآیند خرید", "تاریخ بروزرسانی", "شناسه یکتا (UUID)"
     ]);
   }
 
@@ -29,6 +29,7 @@ export const APPS_SCRIPT_TEMPLATE = `function doGet(e) {
     var rowIndex = parseInt(e.parameter.rowIndex);
     var row = JSON.parse(e.parameter.row);
     if (rowIndex >= 1 && rowIndex <= sheet.getLastRow()) {
+      if (sheet.getMaxColumns() < row.length) { sheet.insertColumnsAfter(sheet.getMaxColumns(), row.length - sheet.getMaxColumns()); }
       sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
     }
     return ContentService
@@ -63,6 +64,7 @@ function doPost(e) {
   } else if (data.action === "update") {
     var r = parseInt(data.rowIndex);
     if (r >= 1 && r <= sheet.getLastRow()) {
+      if (sheet.getMaxColumns() < data.row.length) { sheet.insertColumnsAfter(sheet.getMaxColumns(), data.row.length - sheet.getMaxColumns()); }
       sheet.getRange(r, 1, 1, data.row.length).setValues([data.row]);
     }
   } else if (data.action === "delete") {
@@ -75,6 +77,9 @@ function doPost(e) {
 }`;
 
 const TIMEOUT_ERROR_MSG = 'زمان انتظار ارتباط با گوگل شیت به پایان رسید (کندی یا اختلال اینترنت). لطفاً دوباره امتحان کنید.';
+
+export const isWebhookTimeout = (err: any): boolean =>
+  String(err?.message || '').includes('زمان انتظار');
 
 const executeWithTimeout = async (url: string, options: RequestInit, timeoutMs = 35000): Promise<Response> => {
   const controller = new AbortController();
@@ -198,10 +203,69 @@ export const deleteViaWebhook = async (webhookUrl: string, rowIndex: number): Pr
 };
 
 /**
+ * پاسخ وب‌هوک (no-cors) قابل خواندن نیست؛ پس «تایم‌اوت» لزوماً به معنی «انجام نشدن» نیست.
+ * بعد از تایم‌اوت، شیت را دوباره می‌خوانیم و اگر ویرایش اعمال شده بود آن را موفق حساب می‌کنیم.
+ */
+export const updateViaWebhookVerified = async (
+  webhookUrl: string,
+  rowIndex: number,
+  house: DivarHouseVisit
+): Promise<void> => {
+  try {
+    await updateViaWebhook(webhookUrl, rowIndex, house);
+  } catch (err: any) {
+    if (!isWebhookTimeout(err)) throw err;
+    let fresh: DivarHouseVisit[];
+    try {
+      fresh = await fetchViaWebhook(webhookUrl);
+    } catch {
+      throw err;
+    }
+    const row = fresh.find(r => r.rowIndex === rowIndex);
+    if (row && houseContentKey(row) === houseContentKey(house)) return;
+    throw err;
+  }
+};
+
+/**
+ * حذف با تأیید بعد از تایم‌اوت: اگر تعداد ردیف‌های همان ملک کم شده باشد، حذف انجام شده است.
+ */
+export const deleteViaWebhookVerified = async (
+  webhookUrl: string,
+  rowIndex: number,
+  remoteBefore: DivarHouseVisit[]
+): Promise<void> => {
+  try {
+    await deleteViaWebhook(webhookUrl, rowIndex);
+  } catch (err: any) {
+    if (!isWebhookTimeout(err)) throw err;
+    const target = remoteBefore.find(r => r.rowIndex === rowIndex);
+    if (!target) throw err;
+    let fresh: DivarHouseVisit[];
+    try {
+      fresh = await fetchViaWebhook(webhookUrl);
+    } catch {
+      throw err;
+    }
+    const key = houseContentKey(target);
+    const count = (list: DivarHouseVisit[]) =>
+      target.uid ? list.filter(r => r.uid === target.uid).length : list.filter(r => houseContentKey(r) === key).length;
+    if (count(fresh) < count(remoteBefore)) return;
+    throw err;
+  }
+};
+
+/**
  * خواندن سطرهای گوگل شیت از طریق وب‌هوک (درخواست GET)
  */
 export const fetchViaWebhook = async (webhookUrl: string): Promise<DivarHouseVisit[]> => {
-  const response = await executeWithTimeout(webhookUrl, { method: 'GET' }, 35000);
+  // خواندن بی‌خطر است و بدون اثر جانبی؛ در صورت کندی/قطعی لحظه‌ای یک بار دوباره تلاش می‌کنیم.
+  let response: Response;
+  try {
+    response = await executeWithTimeout(webhookUrl, { method: 'GET' }, 30000);
+  } catch (firstErr: any) {
+    response = await executeWithTimeout(webhookUrl, { method: 'GET' }, 30000);
+  }
   if (!response.ok) {
     throw new Error(`خطا در دریافت اطلاعات از گوگل شیت (${response.status})`);
   }
