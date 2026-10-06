@@ -107,6 +107,7 @@ export default function App() {
             const realHouses = parsed.filter((h: any) => 
               h && 
               !String(h.id || '').startsWith('sample-') && 
+              h.rowIndex !== 1 &&
               !String(h.id || '').startsWith('divar-1') && 
               !String(h.id || '').startsWith('divar-2') && 
               !String(h.id || '').startsWith('divar-3')
@@ -942,8 +943,13 @@ export default function App() {
           setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
           showNotification(errorMsg, 'error');
 
-          // اگر rowIndex قدیمی بوده یا رکورد از قبل حذف شده، بلافاصله شیت را دوباره بخوان
-          // تا رکورد بعدی اشتباهاً حذف نشود و UI با وضعیت واقعی هماهنگ شود.
+          // اگر رکورد دیگر در شیت وجود ندارد، یعنی حذف قبلاً انجام شده یا رکورد stale بوده.
+          // در این حالت نباید نسخه محلی failed آن دوباره توسط merge به UI برگردد.
+          if (errorMsg.includes('این ملک دیگر در گوگل شیت پیدا نشد')) {
+            setHouses(prev => prev.filter(h => h.id !== house.id));
+          }
+
+          // بعد از هر خطای حذف، شیت را دوباره بخوان تا UI با وضعیت واقعی هماهنگ شود.
           try {
             if (currentToken && activeSheet) {
               await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
