@@ -31,6 +31,7 @@ import {
   formatVerbalPriceMillion, 
   calculatePricePerMeter 
 } from '../utils/persianUtils';
+import { normalizePhone } from '../services/sheetsService';
 
 interface HouseFormModalProps {
   isOpen: boolean;
@@ -484,11 +485,13 @@ export const HouseFormModal: React.FC<HouseFormModalProps> = ({
                   شماره تماس مشاور املاک
                 </label>
                 <input
-                  type="text"
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="off"
                   dir="ltr"
                   placeholder="0912..."
                   value={formData.realEstateAgentPhone}
-                  onChange={e => setFormData({ ...formData, realEstateAgentPhone: e.target.value })}
+                  onChange={e => setFormData({ ...formData, realEstateAgentPhone: normalizePhone(e.target.value) })}
                   className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-xl font-mono text-right"
                 />
               </div>

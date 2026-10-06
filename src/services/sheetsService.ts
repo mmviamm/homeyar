@@ -55,6 +55,31 @@ export const isHeaderRow = (row: any[]): boolean => {
   return false;
 };
 
+/**
+ * تبدیل ارقام فارسی/عربی به انگلیسی و حذف هر کاراکتر غیرعددی (و آپاستروف ابتدای متن).
+ */
+export const normalizePhone = (val: unknown): string => {
+  if (val === undefined || val === null) return '';
+  const faDigits = '۰۱۲۳۴۵۶۷۸۹';
+  const arDigits = '٠١٢٣٤٥٦٧٨٩';
+  return String(val)
+    .replace(/[۰-۹]/g, d => String(faDigits.indexOf(d)))
+    .replace(/[٠-٩]/g, d => String(arDigits.indexOf(d)))
+    .replace(/\D+/g, '');
+};
+
+/**
+ * اگر گوگل شیت شماره را عدد کرده و صفر ابتدایی را حذف کرده باشد
+ * (مثلاً ۹۰۱۶۱۲۸۵۱۴)، صفر را برمی‌گردانیم تا ۰۹۰۱۶۱۲۸۵۱۴ شود.
+ */
+export const restoreLeadingZero = (val: unknown): string => {
+  const digits = normalizePhone(val);
+  if (digits.length === 10 && !digits.startsWith('0')) {
+    return '0' + digits;
+  }
+  return digits;
+};
+
 export const parseSpreadsheetId = (input: string): string => {
   const trimmed = input.trim();
   const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -87,7 +112,8 @@ export const houseToRowValues = (house: DivarHouseVisit): (string | number)[] =>
     house.waitsForMortgageLoan || 'نامشخص',
     house.agentCallStatus || 'تماس گرفته نشده',
     house.realEstateAgentAddress || '',
-    house.realEstateAgentPhone || '',
+    // پیشوند ' باعث می‌شود گوگل شیت مقدار را متن بداند و صفر ابتدایی حذف نشود
+    house.realEstateAgentPhone ? `'${normalizePhone(house.realEstateAgentPhone)}` : '',
     house.appointmentLocation || '',
     house.appointmentDateTime || '',
     house.score || 0,
@@ -150,7 +176,7 @@ export const rowValuesToHouse = (row: any[], rowIndex: number): DivarHouseVisit 
     waitsForMortgageLoan: (parseString(row[14]) as MortgageWaitingStatus) || 'نامشخص / باید سوال شود',
     agentCallStatus: (parseString(row[15]) as AgentCallStatus) || 'تماس گرفته نشده',
     realEstateAgentAddress: parseString(row[16]),
-    realEstateAgentPhone: parseString(row[17]),
+    realEstateAgentPhone: restoreLeadingZero(row[17]),
     appointmentLocation: parseString(row[18]),
     appointmentDateTime: parseString(row[19]),
     score: parseNum(row[20]) || 5,
