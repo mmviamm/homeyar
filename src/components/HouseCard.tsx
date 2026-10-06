@@ -16,7 +16,9 @@ import {
   PhoneCall,
   AlertTriangle,
   RefreshCw,
-  CheckCircle2
+  CheckCircle2,
+  Archive,
+  ArchiveRestore
 } from 'lucide-react';
 import { DivarHouseVisit } from '../types/house';
 import { 
@@ -30,6 +32,7 @@ interface HouseCardProps {
   house: DivarHouseVisit;
   onEdit: (house: DivarHouseVisit) => void;
   onDeleteRequest: (house: DivarHouseVisit) => void;
+  onToggleArchive?: (house: DivarHouseVisit) => void;
   onRetrySync?: (house: DivarHouseVisit) => void;
   isComparing?: boolean;
   onToggleCompare?: (house: DivarHouseVisit) => void;
@@ -39,6 +42,7 @@ export const HouseCard: React.FC<HouseCardProps> = ({
   house,
   onEdit,
   onDeleteRequest,
+  onToggleArchive,
   onRetrySync,
   isComparing = false,
   onToggleCompare,
@@ -62,6 +66,8 @@ export const HouseCard: React.FC<HouseCardProps> = ({
 
   return (
     <div className={`bg-white rounded-3xl border transition-all duration-200 overflow-hidden shadow-xs hover:shadow-md flex flex-col justify-between text-right ${
+      house.isArchived ? 'opacity-70' : ''
+    } ${
       house.syncStatus === 'failed' 
         ? 'border-rose-300 ring-2 ring-rose-200' 
         : isComparing 
@@ -70,6 +76,12 @@ export const HouseCard: React.FC<HouseCardProps> = ({
     }`}>
       {/* هدر کارت */}
       <div className="p-5 pb-3">
+        {house.isArchived && (
+          <div className="mb-3 px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded-2xl flex items-center gap-1.5 text-xs text-slate-600 font-bold">
+            <Archive className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+            <span>آرشیو شده</span>
+          </div>
+        )}
         {/* نوار خطای همگام‌سازی در صورت عدم ارسال به شیت */}
         {house.syncStatus === 'failed' && (
           <div className="mb-3 p-2.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between text-xs text-rose-900 font-bold">
@@ -346,6 +358,18 @@ export const HouseCard: React.FC<HouseCardProps> = ({
           >
             <Edit3 className="w-4 h-4" />
           </button>
+
+          {onToggleArchive && (
+            <button
+              type="button"
+              onClick={() => onToggleArchive(house)}
+              disabled={house.syncStatus === 'pending'}
+              className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-xl transition-colors disabled:opacity-40"
+              title={house.isArchived ? 'خارج کردن از آرشیو' : 'انتقال به آرشیو'}
+            >
+              {house.isArchived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+            </button>
+          )}
 
           <button
             type="button"

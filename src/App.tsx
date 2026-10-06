@@ -793,12 +793,17 @@ export default function App() {
   // ۱۳. تلاش مجدد برای ملکی که با خطا مواجه شده بود.
   // نکته مهم: تصمیم «ویرایش یا ردیف جدید» از روی house.pendingOp گرفته می‌شود (نه از روی id)،
   // و قبل از هر نوشتن، شیت خوانده می‌شود تا تلاش مجدد هرگز ردیف تکراری نسازد.
-  const handleRetrySync = async (house: DivarHouseVisit) => {
+  const handleRetrySync = async (
+    house: DivarHouseVisit,
+    options?: { quiet?: boolean; successMessage?: string }
+  ) => {
     if (retryInProgressRef.current.has(house.id)) return;
     retryInProgressRef.current.add(house.id);
 
     setHouses(prev => prev.map(h => (h.id === house.id ? { ...h, syncStatus: 'pending' as const, syncError: undefined } : h)));
-    showNotification(`در حال تلاش مجدد برای ارسال ملک "${house.title || house.address}" به گوگل شیت...`, 'info');
+    if (!options?.quiet) {
+      showNotification(`در حال تلاش مجدد برای ارسال ملک "${house.title || house.address}" به گوگل شیت...`, 'info');
+    }
 
     inFlightMutationsRef.current += 1;
     const op: 'create' | 'update' = house.pendingOp ?? (house.id.startsWith('house-row-') ? 'update' : 'create');
@@ -871,7 +876,7 @@ export default function App() {
             : h
         )
       );
-      showNotification(`ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
+      showNotification(options?.successMessage ?? `ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
 
       if (useApi) {
         await syncFromSheet(currentToken as string, activeSheet!.id, activeSheet!.sheetName);
@@ -895,6 +900,36 @@ export default function App() {
       retryInProgressRef.current.delete(house.id);
       inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
     }
+  };
+
+  // آرشیو / خروج از آرشیو: وضعیت آرشیو در ستون Z شیت ذخیره می‌شود و روی همه دیوایس‌ها همگام می‌شود.
+  // از همان مسیر امن و idempotent «ویرایش» استفاده می‌کنیم (یافتن ردیف با uid، بدون ردیف تکراری).
+  const handleToggleArchive = async (house: DivarHouseVisit) => {
+    if (house.syncStatus === 'pending' || retryInProgressRef.current.has(house.id)) return;
+    const nextArchived = !house.isArchived;
+    const name = house.title || house.address;
+
+    // حالت آفلاین (بدون شیت): فقط محلی
+    if (!activeSheet && !webhookUrl) {
+      setHouses(prev => prev.map(h => (h.id === house.id ? { ...h, isArchived: nextArchived } : h)));
+      showNotification(nextArchived ? `«${name}» به آرشیو منتقل شد.` : `«${name}» از آرشیو خارج شد.`, 'info');
+      return;
+    }
+
+    const updated: DivarHouseVisit = {
+      ...house,
+      isArchived: nextArchived,
+      pendingOp: house.pendingOp === 'create' ? 'create' : 'update',
+      retryBase:
+        house.pendingOp === 'create'
+          ? undefined
+          : house.retryBase || { ...house, retryBase: undefined, pendingOp: undefined },
+    };
+    setHouses(prev => prev.map(h => (h.id === house.id ? updated : h)));
+    await handleRetrySync(updated, {
+      quiet: true,
+      successMessage: nextArchived ? `«${name}» به آرشیو منتقل شد.` : `«${name}» از آرشیو خارج شد.`,
+    });
   };
 
   // ارسال مجدد تمام موارد ناموفق
@@ -1086,6 +1121,13 @@ export default function App() {
   useEffect(() => {
     let result = [...houses];
 
+    // آرشیو: به‌صورت پیش‌فرض مخفی است (مگر ملکی که ارسالش ناموفق بوده تا دکمه تلاش مجدد دیده شود)
+    if (filterType === 'ARCHIVED') {
+      result = result.filter(h => h.isArchived);
+    } else {
+      result = result.filter(h => !h.isArchived || h.syncStatus === 'failed');
+    }
+
     // فیلتر دسته‌بندی
     if (filterType === 'SCHEDULED') {
       result = result.filter(h => h.appointmentDateTime && h.appointmentDateTime !== '-' && h.appointmentDateTime.trim() !== '');
@@ -1145,13 +1187,15 @@ export default function App() {
   };
 
   // آمارهای کلیدی
-  const totalCount = houses.length;
+  const activeHouses = houses.filter(h => !h.isArchived);
+  const archivedCount = houses.length - activeHouses.length;
+  const totalCount = activeHouses.length;
   const avgPriceMillion = totalCount > 0 
-    ? Math.round(houses.reduce((acc, h) => acc + h.totalPriceMillion, 0) / totalCount) 
+    ? Math.round(activeHouses.reduce((acc, h) => acc + h.totalPriceMillion, 0) / totalCount) 
     : 0;
-  const mortgageCount = houses.filter(h => h.waitsForMortgageLoan.includes('بله')).length;
-  const bestScoring = houses.length > 0
-    ? [...houses].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
+  const mortgageCount = activeHouses.filter(h => h.waitsForMortgageLoan.includes('بله')).length;
+  const bestScoring = activeHouses.length > 0
+    ? [...activeHouses].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
     : null;
 
   // تعداد مواردی که با خطای ارسال به شیت مواجه شده‌اند
@@ -1437,6 +1481,7 @@ export default function App() {
                 { id: 'LOAN_OK', label: 'پذیرش وام مسکن' },
                 { id: 'PARKING_ELEVATOR', label: 'پارکینگ و آسانسور دار' },
                 { id: 'SANAD_TAKBARG', label: 'سند تک‌برگ' },
+                { id: 'ARCHIVED', label: `آرشیو (${toPersianDigits(archivedCount)})` },
               ].map(item => (
                 <button
                   key={item.id}
@@ -1484,6 +1529,7 @@ export default function App() {
                       setIsFormOpen(true);
                     }}
                     onDeleteRequest={handleDeleteRequest}
+                    onToggleArchive={handleToggleArchive}
                     onRetrySync={handleRetrySync}
                     isComparing={selectedForCompare.some(c => c.id === house.id)}
                     onToggleCompare={toggleCompare}
@@ -1495,7 +1541,7 @@ export default function App() {
                 <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-2xl flex items-center justify-center mx-auto">
                   <HomeIcon className="w-6 h-6" />
                 </div>
-                <h3 className="text-base font-bold text-slate-800">هیچ ملکی ثبت نشده است</h3>
+                <h3 className="text-base font-bold text-slate-800">{filterType === 'ARCHIVED' ? 'آرشیو خالی است' : 'هیچ ملکی ثبت نشده است'}</h3>
                 <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
                   لیست شما خالی است. با اتصال به گوگل شیت اطلاعات شما بارگذاری می‌شود، یا با زدن دکمه زیر اولین مورد بازدید را ثبت نمایید.
                 </p>
@@ -1522,6 +1568,7 @@ export default function App() {
               setIsFormOpen(true);
             }}
             onDelete={handleDeleteRequest}
+            onToggleArchive={handleToggleArchive}
             onRetrySync={handleRetrySync}
           />
         )}

@@ -10,7 +10,9 @@ import {
   Phone,
   AlertTriangle,
   RefreshCw,
-  CheckCircle2
+  CheckCircle2,
+  Archive,
+  ArchiveRestore
 } from 'lucide-react';
 import { DivarHouseVisit } from '../types/house';
 import { 
@@ -25,6 +27,7 @@ interface SheetTableViewProps {
   spreadsheetUrl?: string;
   onEdit: (house: DivarHouseVisit) => void;
   onDelete: (house: DivarHouseVisit) => void;
+  onToggleArchive?: (house: DivarHouseVisit) => void;
   onRetrySync?: (house: DivarHouseVisit) => void;
 }
 
@@ -33,6 +36,7 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
   spreadsheetUrl,
   onEdit,
   onDelete,
+  onToggleArchive,
   onRetrySync,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -138,7 +142,7 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
           </thead>
           <tbody className="divide-y divide-slate-100 font-medium">
             {sorted.map((house, idx) => (
-              <tr key={house.id} className="hover:bg-slate-50/80 transition-colors">
+              <tr key={house.id} className={`hover:bg-slate-50/80 transition-colors ${house.isArchived ? 'opacity-60' : ''}`}>
                 <td className="p-3 text-center text-2xs font-mono text-slate-400 bg-slate-50/50">
                   {toPersianDigits(house.rowIndex || idx + 2)}
                 </td>
@@ -243,6 +247,17 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
                     >
                       <Edit3 className="w-3.5 h-3.5" />
                     </button>
+                    {onToggleArchive && (
+                      <button
+                        type="button"
+                        onClick={() => onToggleArchive(house)}
+                        disabled={house.syncStatus === 'pending'}
+                        className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg disabled:opacity-40"
+                        title={house.isArchived ? 'خارج کردن از آرشیو' : 'انتقال به آرشیو'}
+                      >
+                        {house.isArchived ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => onDelete(house)}

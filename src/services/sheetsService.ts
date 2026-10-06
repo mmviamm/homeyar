@@ -28,10 +28,11 @@ export const HEADERS_FA = [
   'وضعیت فرآیند خرید',
   'تاریخ بروزرسانی',
   'شناسه یکتا (UUID)',
+  'آرشیو شده',
 ];
 
-// آخرین ستون داده‌ها (ستون ۲۵م = Y)
-export const LAST_COLUMN = 'Y';
+// آخرین ستون داده‌ها (ستون ۲۶م = Z)
+export const LAST_COLUMN = 'Z';
 
 export const generateUid = (): string => {
   if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
@@ -47,7 +48,11 @@ export const generateUid = (): string => {
  * امضای محتوای یک ملک (بدون تاریخ بروزرسانی و uid) برای مقایسه‌ی دقیق محتوای دو ردیف.
  */
 export const houseContentKey = (house: DivarHouseVisit): string =>
-  JSON.stringify(houseToRowValues({ ...house, uid: '' }).slice(0, 23));
+  {
+    const row = houseToRowValues({ ...house, uid: '' });
+    // ستون‌های داده + وضعیت آرشیو (بدون تاریخ بروزرسانی و uid)
+    return JSON.stringify([...row.slice(0, 23), row[25]]);
+  };
 
 export const isHeaderRow = (row: any[]): boolean => {
   if (!row || row.length === 0) return false;
@@ -141,6 +146,7 @@ export const houseToRowValues = (house: DivarHouseVisit): (string | number)[] =>
     house.visitStatus || 'در انتظار تماس',
     new Date().toLocaleDateString('fa-IR'),
     house.uid || '',
+    house.isArchived ? 'بله' : '',
   ];
 };
 
@@ -180,11 +186,14 @@ export const rowValuesToHouse = (row: any[], rowIndex: number): DivarHouseVisit 
   }
 
   const uid = parseString(row[24]);
+  const archivedRaw = parseString(row[25]).toLowerCase();
+  const isArchived = archivedRaw === 'بله' || archivedRaw === 'true' || archivedRaw === 'yes' || archivedRaw === '1';
 
   return {
     // اگر uid ثبت شده باشد، شناسه‌ی ملک ثابت است و با جابجایی ردیف‌ها تغییر نمی‌کند
     id: uid || `house-row-${rowIndex}`,
     uid: uid || undefined,
+    isArchived,
     rowIndex,
     title: parseString(row[0]) || `ملک ردیف ${rowIndex}`,
     divarUrl: parseString(row[1]),
