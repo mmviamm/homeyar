@@ -303,8 +303,8 @@ export const readHouseVisits = async (
 ): Promise<DivarHouseVisit[]> => {
   const cleanId = parseSpreadsheetId(spreadsheetId);
   let safeSheet = sheetName || SHEET_NAME_VISITS;
-  // خواندن از سطر اول (A1:Z) تا در صورتی که کاربر سرستون ننوشته باشد یا سطر اول دیتا باشد، هیچ رکوردی از دست نرود
-  let range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A1:Z`);
+  // ردیف ۱ همیشه Header است و هرگز نباید به عنوان رکورد خوانده شود.
+  let range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:X`);
 
   let response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}`, {
     headers: {
@@ -317,7 +317,7 @@ export const readHouseVisits = async (
     try {
       const details = await getSpreadsheetDetails(accessToken, cleanId);
       safeSheet = details.sheetName;
-      range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A1:Z`);
+      range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:X`);
       response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}`, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -340,17 +340,11 @@ export const readHouseVisits = async (
     return [];
   }
 
-  // تشخیص هوشمند سرستون: اگر سطر اول سرستون باشد، دیتا از سطر ۲ شروع می‌شود. در غیر این صورت سطر اول خود دیتا است.
-  const firstRowIsHeader = isHeaderRow(rows[0]);
-  const dataRowsWithIndex: { row: any[]; rowIndex: number }[] = [];
-
-  for (let i = 0; i < rows.length; i++) {
-    if (i === 0 && firstRowIsHeader) {
-      continue;
-    }
-    const rowIndex = i + 1; // شماره سطر واقعی در گوگل شیت
-    dataRowsWithIndex.push({ row: rows[i], rowIndex });
-  }
+  // چون خواندن از A2:X انجام شده، اولین داده این آرایه مربوط به ردیف ۲ شیت است.
+  const dataRowsWithIndex = rows.map((row, index) => ({
+    row,
+    rowIndex: index + 2,
+  }));
 
   return dataRowsWithIndex
     .map(({ row, rowIndex }) => rowValuesToHouse(row, rowIndex))
@@ -372,7 +366,32 @@ export const addHouseVisit = async (
   const cleanId = parseSpreadsheetId(spreadsheetId);
   const rowValues = houseToRowValues(house);
   const safeSheet = sheetName || SHEET_NAME_VISITS;
-  const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A:X`);
+
+  // ردیف ۱ باید حتماً Header باشد؛ در غیر این صورت append ممکن است اولین داده را در ردیف ۱ بنویسد.
+  const headerRange = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A1:X1`);
+  const headerResponse = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${headerRange}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!headerResponse.ok) {
+    const errorText = await headerResponse.text();
+    throw new Error(`خطا در بررسی Header گوگل شیت: ${headerResponse.status} ${errorText}`);
+  }
+
+  const headerData = await headerResponse.json();
+  const currentHeader = headerData.values?.[0] || [];
+  const headerMatches = HEADERS_FA.every((header, index) => currentHeader[index] === header);
+
+  if (!headerMatches) {
+    throw new Error('Header گوگل شیت با ساختار مورد انتظار برنامه مطابقت ندارد. ردیف اول را طبق Header برنامه تنظیم کنید.');
+  }
+
+  const range = encodeURIComponent(`'${safeSheet.replace(/'/g, "''")}'!A2:X`);
 
   const response = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${range}:append?valueInputOption=USER_ENTERED`,
@@ -413,6 +432,10 @@ export const updateHouseVisit = async (
   house: DivarHouseVisit,
   sheetName?: string
 ): Promise<void> => {
+  if (!Number.isInteger(rowIndex) || rowIndex < 2) {
+    throw new Error('ردیف ۱ Header است و هرگز قابل ویرایش نیست.');
+  }
+
   const cleanId = parseSpreadsheetId(spreadsheetId);
   const rowValues = houseToRowValues(house);
   const safeSheet = sheetName || SHEET_NAME_VISITS;
@@ -447,6 +470,10 @@ export const deleteHouseVisit = async (
   sheetId?: number,
   sheetName?: string
 ): Promise<void> => {
+  if (!Number.isInteger(rowIndex) || rowIndex < 2) {
+    throw new Error('ردیف ۱ Header است و هرگز قابل حذف نیست.');
+  }
+
   const cleanId = parseSpreadsheetId(spreadsheetId);
 
   // استخراج خودکار و تضمین شده sheetId عددی صحیح از اسپردشیت برای جلوگیری از خطای Invalid sheet ID
