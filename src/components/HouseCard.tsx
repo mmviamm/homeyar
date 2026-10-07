@@ -34,6 +34,7 @@ interface HouseCardProps {
   onDeleteRequest: (house: DivarHouseVisit) => void;
   onToggleArchive?: (house: DivarHouseVisit) => void;
   onRetrySync?: (house: DivarHouseVisit) => void;
+  onForgetFailed?: (house: DivarHouseVisit) => void;
   isComparing?: boolean;
   onToggleCompare?: (house: DivarHouseVisit) => void;
 }
@@ -44,6 +45,7 @@ export const HouseCard: React.FC<HouseCardProps> = ({
   onDeleteRequest,
   onToggleArchive,
   onRetrySync,
+  onForgetFailed,
   isComparing = false,
   onToggleCompare,
 }) => {
@@ -87,19 +89,38 @@ export const HouseCard: React.FC<HouseCardProps> = ({
           <div className="mb-3 p-2.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between text-xs text-rose-900 font-bold">
             <div className="flex items-center gap-1.5">
               <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
-              <span>عدم ارسال به شیت (خطای اینترنت)</span>
+              <span>
+                {house.pendingOp === 'delete'
+                  ? 'حذف از شیت انجام نشد (خطای اینترنت)'
+                  : house.pendingOp === 'update'
+                  ? 'ویرایش در شیت ذخیره نشد (خطای اینترنت)'
+                  : 'عدم ارسال به شیت (خطای اینترنت)'}
+              </span>
             </div>
-            {onRetrySync && (
-              <button
-                type="button"
-                onClick={() => onRetrySync(house)}
-                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-3xs font-bold flex items-center gap-1 shadow-xs transition-colors"
-                title="تلاش مجدد برای ارسال به گوگل شیت"
-              >
-                <RefreshCw className="w-3 h-3" />
-                <span>تلاش مجدد</span>
-              </button>
-            )}
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {onRetrySync && (
+                <button
+                  type="button"
+                  onClick={() => onRetrySync(house)}
+                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-3xs font-bold flex items-center gap-1 shadow-xs transition-colors"
+                  title="تلاش مجدد برای ارسال به گوگل شیت"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>تلاش مجدد</span>
+                </button>
+              )}
+              {onForgetFailed && (
+                <button
+                  type="button"
+                  onClick={() => onForgetFailed(house)}
+                  className="px-2.5 py-1 bg-white hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-xl text-3xs font-bold flex items-center gap-1 transition-colors"
+                  title="فراموش کردن این مورد ناموفق"
+                >
+                  <X className="w-3 h-3" />
+                  <span>فراموش کن</span>
+                </button>
+              )}
+            </div>
           </div>
         )}
 

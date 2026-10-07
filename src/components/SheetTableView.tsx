@@ -12,7 +12,8 @@ import {
   RefreshCw,
   CheckCircle2,
   Archive,
-  ArchiveRestore
+  ArchiveRestore,
+  X
 } from 'lucide-react';
 import { DivarHouseVisit } from '../types/house';
 import { 
@@ -29,6 +30,7 @@ interface SheetTableViewProps {
   onDelete: (house: DivarHouseVisit) => void;
   onToggleArchive?: (house: DivarHouseVisit) => void;
   onRetrySync?: (house: DivarHouseVisit) => void;
+  onForgetFailed?: (house: DivarHouseVisit) => void;
 }
 
 export const SheetTableView: React.FC<SheetTableViewProps> = ({
@@ -38,6 +40,7 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
   onDelete,
   onToggleArchive,
   onRetrySync,
+  onForgetFailed,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<'rowIndex' | 'totalPriceMillion' | 'score' | 'areaSqm'>('rowIndex');
@@ -231,6 +234,17 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
                       >
                         <RefreshCw className="w-3 h-3" />
                         <span>ارسال مجدد</span>
+                      </button>
+                    )}
+                    {house.syncStatus === 'failed' && onForgetFailed && (
+                      <button
+                        type="button"
+                        onClick={() => onForgetFailed(house)}
+                        className="px-2 py-1 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 rounded-lg text-3xs font-bold flex items-center gap-1"
+                        title="فراموش کردن این مورد ناموفق"
+                      >
+                        <X className="w-3 h-3" />
+                        <span>فراموش کن</span>
                       </button>
                     )}
                     {house.syncStatus === 'pending' && (

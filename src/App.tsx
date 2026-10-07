@@ -263,8 +263,8 @@ export default function App() {
         continue;
       }
 
-      // ویرایشِ ناموفق هنوز روی شیت اعمال نشده؛ باید همراه دکمه تلاش مجدد باقی بماند.
-      if (local.pendingOp === 'update') {
+      // ویرایش یا حذفِ ناموفق هنوز روی شیت اعمال نشده؛ باید همراه دکمه تلاش مجدد باقی بماند.
+      if (local.pendingOp === 'update' || local.pendingOp === 'delete') {
         keptUnsynced.push(local);
         continue;
       }
@@ -302,7 +302,7 @@ export default function App() {
     for (const h of remoteSynced) {
       // نسخه‌ی قدیمیِ ردیفی که ویرایش ناموفقش محلی نگه داشته شده، دوباره نمایش داده نمی‌شود.
       const replacedByFailedEdit = keptUnsynced.some(k => {
-        if (k.pendingOp !== 'update') return false;
+        if (k.pendingOp !== 'update' && k.pendingOp !== 'delete') return false;
         if (k.uid && h.uid) return k.uid === h.uid;
         const base = k.retryBase || k;
         return !h.uid && getHouseIdentityKey(base) === getHouseIdentityKey(h);
@@ -806,7 +806,7 @@ export default function App() {
     }
 
     inFlightMutationsRef.current += 1;
-    const op: 'create' | 'update' = house.pendingOp ?? (house.id.startsWith('house-row-') ? 'update' : 'create');
+    const op: 'create' | 'update' | 'delete' = house.pendingOp ?? (house.id.startsWith('house-row-') ? 'update' : 'create');
     const uid = house.uid || house.retryBase?.uid || generateUid();
     const toWrite: DivarHouseVisit = { ...house, uid };
 
@@ -829,7 +829,28 @@ export default function App() {
 
       let savedRow: number | undefined;
 
-      if (op === 'update') {
+      if (op === 'delete') {
+        // تلاش مجدد حذف: ردیف فعلی را از روی شیت پیدا می‌کنیم؛ اگر دیگر وجود نداشت، حذف قبلاً انجام شده است.
+        let rowIndex: number | undefined;
+        try {
+          rowIndex = await resolveCurrentRowIndex(
+            remote,
+            { ...toWrite, uid: house.uid || house.retryBase?.uid },
+            house.retryBase || house
+          );
+        } catch (findErr: any) {
+          if (!String(findErr?.message || '').includes('دیگر در گوگل شیت پیدا نشد')) throw findErr;
+        }
+        if (rowIndex !== undefined) {
+          if (useApi) {
+            await deleteHouseVisit(currentToken as string, activeSheet!.id, rowIndex, activeSheet!.sheetId, activeSheet!.sheetName);
+          } else {
+            await deleteViaWebhookVerified(webhookUrl as string, rowIndex, remote);
+          }
+        }
+        setHouses(prev => prev.filter(h => h.id !== house.id && (rowIndex === undefined || h.rowIndex !== rowIndex)));
+        showNotification(`ملک "${house.title || house.address}" با موفقیت از گوگل شیت حذف شد.`);
+      } else if (op === 'update') {
         const rowIndex = await resolveCurrentRowIndex(
           remote,
           { ...toWrite, uid: house.uid || house.retryBase?.uid },
@@ -862,21 +883,23 @@ export default function App() {
         }
       }
 
-      setHouses(prev =>
-        prev.map(h =>
-          h.id === house.id
-            ? {
-                ...toWrite,
-                rowIndex: savedRow ?? toWrite.rowIndex,
-                syncStatus: 'synced' as const,
-                syncError: undefined,
-                pendingOp: undefined,
-                retryBase: undefined,
-              }
-            : h
-        )
-      );
-      showNotification(options?.successMessage ?? `ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
+      if (op !== 'delete') {
+        setHouses(prev =>
+          prev.map(h =>
+            h.id === house.id
+              ? {
+                  ...toWrite,
+                  rowIndex: savedRow ?? toWrite.rowIndex,
+                  syncStatus: 'synced' as const,
+                  syncError: undefined,
+                  pendingOp: undefined,
+                  retryBase: undefined,
+                }
+              : h
+          )
+        );
+        showNotification(options?.successMessage ?? `ملک "${house.title || house.address}" با موفقیت در گوگل شیت ذخیره شد.`);
+      }
 
       if (useApi) {
         await syncFromSheet(currentToken as string, activeSheet!.id, activeSheet!.sheetName);
@@ -929,6 +952,96 @@ export default function App() {
     await handleRetrySync(updated, {
       quiet: true,
       successMessage: nextArchived ? `«${name}» به آرشیو منتقل شد.` : `«${name}» از آرشیو خارج شد.`,
+    });
+  };
+
+  // فراموش کردن یک مورد ناموفق (ایجاد، ویرایش یا حذف) بدون دست زدن به سایر موارد:
+  // - ایجاد ناموفق: ملک محلی که هرگز به شیت نرسیده کنار گذاشته می‌شود.
+  // - ویرایش ناموفق: تغییرات لغو می‌شود و نسخه قبل از ویرایش برمی‌گردد.
+  // - حذف ناموفق: درخواست حذف لغو می‌شود و ملک مثل قبل در لیست می‌ماند.
+  const handleForgetFailed = (house: DivarHouseVisit) => {
+    if (house.syncStatus !== 'failed' || retryInProgressRef.current.has(house.id)) return;
+    const op = house.pendingOp ?? (house.id.startsWith('house-row-') ? 'update' : 'create');
+    const name = house.title || house.address || 'این ملک';
+
+    const config = {
+      create: {
+        title: 'این ثبت ناموفق فراموش شود؟',
+        description: `ملک "${name}" هرگز به گوگل شیت ارسال نشده است. با فراموش کردن، این مورد به‌طور کامل از لیست پاک می‌شود و قابل بازیابی نیست.`,
+        confirmLabel: 'فراموش شود و حذف گردد',
+        isDangerous: true,
+        done: `ثبت ناموفق «${name}» فراموش شد.`,
+      },
+      update: {
+        title: 'این ویرایش ناموفق فراموش شود؟',
+        description: `تغییرات ذخیره‌نشده ملک "${name}" کنار گذاشته می‌شود و اطلاعات قبل از ویرایش دوباره نمایش داده می‌شود.`,
+        confirmLabel: 'فراموش شود',
+        isDangerous: true,
+        done: `ویرایش ناموفق «${name}» فراموش شد و اطلاعات قبلی بازگردانده شد.`,
+      },
+      delete: {
+        title: 'این حذف ناموفق فراموش شود؟',
+        description: `درخواست حذف ملک "${name}" لغو می‌شود و این ملک مثل قبل در لیست و در گوگل شیت باقی می‌ماند.`,
+        confirmLabel: 'فراموش شود',
+        isDangerous: false,
+        done: `حذف ناموفق «${name}» فراموش شد و ملک در لیست باقی ماند.`,
+      },
+    }[op];
+
+    setConfirmationState({
+      isOpen: true,
+      type: 'generic',
+      title: config.title,
+      description: config.description,
+      details: [
+        { label: 'عنوان', value: house.title || house.address },
+        ...(house.syncError ? [{ label: 'خطا', value: house.syncError }] : []),
+      ],
+      confirmLabel: config.confirmLabel,
+      isDangerous: config.isDangerous,
+      isLoading: false,
+      onConfirm: async () => {
+        // اگر در فاصله‌ی نمایش پیام، تلاش مجدد شروع شده، چیزی را فراموش نمی‌کنیم.
+        if (retryInProgressRef.current.has(house.id)) {
+          setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
+          return;
+        }
+        // ویرایشِ بدون نسخه‌ی قبلی قابل بازگردانی نیست؛ نسخه‌ی محلی کنار گذاشته می‌شود و از شیت دوباره خوانده می‌شود.
+        const needsRefetch = op === 'update' && !house.retryBase;
+        setHouses(prev => {
+          if (op === 'create' || needsRefetch) return prev.filter(h => h.id !== house.id);
+          return prev.map(h => {
+            if (h.id !== house.id) return h;
+            // برای ویرایش، نسخه قبل از ویرایش؛ برای حذف، همان ملک بدون وضعیت خطا
+            const restored = op === 'update' && h.retryBase ? h.retryBase : h;
+            return {
+              ...restored,
+              id: h.id,
+              syncStatus: 'synced' as const,
+              syncError: undefined,
+              pendingOp: undefined,
+              retryBase: undefined,
+            };
+          });
+        });
+        setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
+        showNotification(config.done, 'info');
+        if (needsRefetch) {
+          (async () => {
+            try {
+              const currentToken = token || (await getAccessToken());
+              if (activeSheet && currentToken) {
+                await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+              } else if (webhookUrl) {
+                const fresh = await fetchViaWebhook(webhookUrl);
+                setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+              }
+            } catch (e) {
+              console.warn('Refetch after forgetting failed update failed:', e);
+            }
+          })();
+        }
+      },
     });
   };
 
@@ -1097,6 +1210,15 @@ export default function App() {
           // در این حالت نباید نسخه محلی failed آن دوباره توسط merge به UI برگردد.
           if (errorMsg.includes('این ملک دیگر در گوگل شیت پیدا نشد')) {
             setHouses(prev => prev.filter(h => h.id !== house.id));
+          } else {
+            // حذف ناموفق: ملک با وضعیت «ناموفق» باقی می‌ماند تا کاربر بتواند دوباره تلاش کند یا آن را فراموش کند.
+            setHouses(prev =>
+              prev.map(h =>
+                h.id === house.id
+                  ? { ...h, syncStatus: 'failed' as const, syncError: errorMsg, pendingOp: 'delete' as const }
+                  : h
+              )
+            );
           }
 
           // بعد از هر خطای حذف، شیت را دوباره بخوان تا UI با وضعیت واقعی هماهنگ شود.
@@ -1531,6 +1653,7 @@ export default function App() {
                     onDeleteRequest={handleDeleteRequest}
                     onToggleArchive={handleToggleArchive}
                     onRetrySync={handleRetrySync}
+                    onForgetFailed={handleForgetFailed}
                     isComparing={selectedForCompare.some(c => c.id === house.id)}
                     onToggleCompare={toggleCompare}
                   />
@@ -1570,6 +1693,7 @@ export default function App() {
             onDelete={handleDeleteRequest}
             onToggleArchive={handleToggleArchive}
             onRetrySync={handleRetrySync}
+            onForgetFailed={handleForgetFailed}
           />
         )}
       </main>
