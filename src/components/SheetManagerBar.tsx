@@ -12,13 +12,12 @@ import {
   Smartphone,
   ChevronDown
 } from 'lucide-react';
-import { User } from 'firebase/auth';
 import { ActiveSpreadsheetInfo } from '../types/house';
 import { GoogleSignInButton } from './GoogleSignInButton';
 import { toPersianDigits } from '../utils/persianUtils';
 
 interface SheetManagerBarProps {
-  user: User | any | null;
+  user: any | null;
   activeSheet: ActiveSpreadsheetInfo | null;
   webhookUrl: string | null;
   isLoading: boolean;

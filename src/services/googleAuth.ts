@@ -1,12 +1,3 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  onAuthStateChanged, 
-  signOut,
-  User 
-} from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Configure Workspace OAuth scopes
@@ -14,19 +5,6 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
 ];
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-
-const provider = new GoogleAuthProvider();
-SCOPES.forEach(scope => {
-  provider.addScope(scope);
-});
-provider.setCustomParameters({
-  prompt: 'select_account',
-});
-
-// Flag to indicate if we are in the middle of a sign-in flow
-let isSigningIn = false;
 // Cache the access token in memory. MUST NOT store in localStorage/sessionStorage.
 let cachedAccessToken: string | null = null;
 let customUser: { displayName: string | null; email: string | null; photoURL: string | null } | null = null;
@@ -35,21 +13,15 @@ export const initAuth = (
   onAuthSuccess?: (user: any, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        cachedAccessToken = null;
-        if (onAuthFailure) onAuthFailure();
-      }
-    } else if (customUser && cachedAccessToken) {
-      if (onAuthSuccess) onAuthSuccess(customUser, cachedAccessToken);
-    } else {
-      cachedAccessToken = null;
-      if (onAuthFailure) onAuthFailure();
-    }
-  });
+  // توکن فقط در حافظه نگه‌داری می‌شود؛ پس در شروع برنامه هیچ نشستی وجود ندارد مگر اینکه
+  // قبلاً در همین اجرا وارد شده باشیم.
+  if (customUser && cachedAccessToken) {
+    if (onAuthSuccess) onAuthSuccess(customUser, cachedAccessToken);
+  } else {
+    cachedAccessToken = null;
+    if (onAuthFailure) onAuthFailure();
+  }
+  return () => {};
 };
 
 /**
@@ -113,46 +85,14 @@ export const signInWithGoogleIdentity = async (): Promise<{ user: any; accessTok
 };
 
 /**
- * متد ورود هوشمند: ابتدا GSI بدون وابستگی به firebaseapp.com را امتحان می‌کند،
- * و در صورت عدم وجود اسکریپت، به Firebase Popup سوییچ می‌کند.
+ * ورود با حساب گوگل از طریق Google Identity Services.
  */
 export const googleSignIn = async (): Promise<{ user: any; accessToken: string } | null> => {
   try {
-    isSigningIn = true;
-
-    // ۱. بررسی اولویت Google Identity Services (عدم نیاز به firebaseapp.com)
-    if (typeof window !== 'undefined' && (window as any).google?.accounts?.oauth2) {
-      try {
-        const gsiResult = await signInWithGoogleIdentity();
-        return gsiResult;
-      } catch (gsiErr: any) {
-        console.warn('GSI flow encountered an error, falling back to Firebase popup:', gsiErr);
-        // اگر کاربر پاپ‌آپ را بست، متوقف شو
-        if (gsiErr?.message?.includes('popup_closed') || gsiErr?.message?.includes('user_cancel')) {
-          throw gsiErr;
-        }
-      }
-    }
-
-    // ۲. فالبک: استفاده از Firebase Auth
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Failed to get Google Sheets access token from Firebase Auth');
-    }
-
-    cachedAccessToken = credential.accessToken;
-    return { user: result.user, accessToken: cachedAccessToken };
+    return await signInWithGoogleIdentity();
   } catch (error: any) {
     console.error('Sign in error:', error);
-    if (error?.code === 'auth/unauthorized-domain') {
-      const err = new Error('دامنه فعلی در پروژه فایربیس مجاز (Authorized) نشده است.');
-      (err as any).code = 'auth/unauthorized-domain';
-      throw err;
-    }
     throw error;
-  } finally {
-    isSigningIn = false;
   }
 };
 
@@ -186,11 +126,6 @@ export const getAccessToken = async (): Promise<string | null> => {
 };
 
 export const logout = async () => {
-  try {
-    await signOut(auth);
-  } catch (e) {
-    // Ignore signout error if signed in via GSI
-  }
   cachedAccessToken = null;
   customUser = null;
 };

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Key, ExternalLink, X, Check, AlertCircle, Sparkles } from 'lucide-react';
-import { setManualAccessToken } from '../services/firebaseAuth';
+import { setManualAccessToken } from '../services/googleAuth';
 
 interface TokenConnectModalProps {
   isOpen: boolean;

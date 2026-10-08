@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User } from 'firebase/auth';
 import { 
   Plus, 
   Search, 
@@ -29,7 +28,7 @@ import {
   googleSignIn, 
   logout, 
   getAccessToken 
-} from './services/firebaseAuth';
+} from './services/googleAuth';
 import { 
   createHouseHuntingSpreadsheet, 
   getSpreadsheetDetails, 
@@ -66,7 +65,7 @@ import {
 
 export default function App() {
   // ۱. اطلاعات ورود و گوگل شیت
-  const [user, setUser] = useState<User | any | null>(null);
+  const [user, setUser] = useState<any | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   
