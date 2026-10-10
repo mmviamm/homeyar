@@ -100,6 +100,17 @@ export const HouseFormModal: React.FC<HouseFormModalProps> = ({
     setError(null);
   }, [initialHouse, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -127,8 +138,14 @@ export const HouseFormModal: React.FC<HouseFormModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto text-right">
-      <div className="bg-white rounded-3xl w-full max-w-2xl my-4 shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94vh]">
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto text-right cursor-pointer"
+      onClick={onClose}
+    >
+      <div 
+        className="bg-white rounded-3xl w-full max-w-2xl my-4 shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94vh] cursor-default"
+        onClick={e => e.stopPropagation()}
+      >
         {/* هدر فرم */}
         <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -644,8 +661,7 @@ export const HouseFormModal: React.FC<HouseFormModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                disabled={isLoading}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 rounded-xl transition-colors"
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 rounded-xl transition-colors cursor-pointer"
               >
                 انصراف
               </button>

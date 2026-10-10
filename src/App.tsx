@@ -20,7 +20,8 @@ import {
   RefreshCw,
   Smartphone,
   X,
-  Filter
+  Filter,
+  ArrowUpDown
 } from 'lucide-react';
 
 import { DivarHouseVisit, ActiveSpreadsheetInfo, HouseVisitStatus } from './types/house';
@@ -596,133 +597,116 @@ export default function App() {
     setIsFormOpen(false);
     setEditingHouse(null);
 
-    // حالت الف: ویرایش ملک موجود
+    // حالت الف: ویرایش ملک موجود (اجرا در پس‌زمینه بدون نمایش پاپ‌آپ تکراری)
     if (isUpdating && editingHouse) {
-      // اگر در حال ویرایش یک ویرایشِ ناموفق هستیم، ردیف اصلی با نسخه‌ی قبل از ویرایش پیدا می‌شود.
       const originalHouse = editingHouse.retryBase || editingHouse;
+      const stableUid = houseData.uid || originalHouse.uid || generateUid();
+      const updatedPendingHouse: DivarHouseVisit = {
+        ...houseData,
+        uid: stableUid,
+        syncStatus: 'pending',
+        pendingOp: 'update',
+        retryBase: originalHouse,
+      };
 
-      setConfirmationState({
-        isOpen: true,
-        type: 'update',
-        title: `آیا از ویرایش اطلاعات در گوگل شیت مطمئن هستید؟`,
-        description: activeSheet
-          ? `ردیف فعلی ملک در فایل "${activeSheet.title}" قبل از ویرایش دوباره بررسی خواهد شد.`
-          : webhookUrl
-          ? `ردیف فعلی ملک در فایل گوگل شیت قبل از ویرایش دوباره بررسی خواهد شد.`
-          : `اطلاعات ملک "${houseData.title || houseData.address}" ویرایش خواهد شد.`,
-        details: [
-          { label: 'ملک', value: houseData.title || houseData.address },
-          { label: 'قیمت کل', value: `${formatNumberFa(houseData.totalPriceMillion)} میلیون تومان` },
-          { label: 'متراژ', value: `${toPersianDigits(houseData.areaSqm)} متر` },
-          { label: 'امتیاز', value: `${toPersianDigits(houseData.score)} از ۱۰` },
-        ],
-        confirmLabel: 'تأیید و ویرایش در گوگل شیت',
-        isDangerous: false,
-        isLoading: false,
-        onConfirm: async () => {
-          // قبل از اولین await قفل می‌کنیم تا چند کلیک سریع چند update ارسال نکند.
-          if (updateInProgressRef.current) return;
-          updateInProgressRef.current = true;
-          setConfirmationState(prev => ({ ...prev, isLoading: true }));
-          inFlightMutationsRef.current += 1;
-          // uid یک بار ساخته می‌شود تا حتی اگر تلاش اول ناموفق شد، تلاش مجدد همان شناسه را بنویسد.
-          const stableUid = houseData.uid || originalHouse.uid || generateUid();
+      // فوراً در کارت‌ها اعمال کن تا کاربر معطل نماند
+      setHouses(prev => prev.map(h => (h.id === houseData.id ? updatedPendingHouse : h)));
+      showNotification('در حال بروزرسانی اطلاعات در گوگل شیت...', 'info');
 
-          try {
-            const updateToken = currentToken;
+      (async () => {
+        if (updateInProgressRef.current) return;
+        updateInProgressRef.current = true;
+        inFlightMutationsRef.current += 1;
 
-            if (activeSheet && updateToken) {
-              // rowIndex ممکن است از زمان باز شدن فرم تغییر کرده باشد؛ رکورد واقعی را دوباره پیدا کن.
-              const remoteHouses = await readHouseVisits(
-                updateToken,
-                activeSheet.id,
-                activeSheet.sheetName
-              );
-              const currentRowIndex = await resolveCurrentRowIndex(
-                remoteHouses,
-                { ...originalHouse, uid: originalHouse.uid || houseData.uid },
-                originalHouse
-              );
-              const updatedHouse = { ...houseData, uid: stableUid, rowIndex: currentRowIndex };
+        try {
+          const updateToken = currentToken;
 
-              await updateHouseVisit(
-                updateToken,
-                activeSheet.id,
-                currentRowIndex,
-                updatedHouse,
-                activeSheet.sheetName
-              );
+          if (activeSheet && updateToken) {
+            const remoteHouses = await readHouseVisits(
+              updateToken,
+              activeSheet.id,
+              activeSheet.sheetName
+            );
+            const currentRowIndex = await resolveCurrentRowIndex(
+              remoteHouses,
+              { ...originalHouse, uid: originalHouse.uid || houseData.uid },
+              originalHouse
+            );
+            const updatedHouse = { ...houseData, uid: stableUid, rowIndex: currentRowIndex };
 
-              setHouses(prev => prev.map(h =>
-                h.id === houseData.id
-                  ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined, pendingOp: undefined, retryBase: undefined }
-                  : h
-              ));
-              setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
-              showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
-              await syncFromSheet(updateToken, activeSheet.id, activeSheet.sheetName);
-            } else if (webhookUrl) {
-              const remoteHouses = await fetchViaWebhook(webhookUrl);
-              const currentRowIndex = await resolveCurrentRowIndex(
-                remoteHouses,
-                { ...originalHouse, uid: originalHouse.uid || houseData.uid },
-                originalHouse
-              );
-              const updatedHouse = { ...houseData, uid: stableUid, rowIndex: currentRowIndex };
+            await updateHouseVisit(
+              updateToken,
+              activeSheet.id,
+              currentRowIndex,
+              updatedHouse,
+              activeSheet.sheetName
+            );
 
-              await updateViaWebhookVerified(webhookUrl, currentRowIndex, updatedHouse);
-
-              setHouses(prev => prev.map(h =>
-                h.id === houseData.id
-                  ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined, pendingOp: undefined, retryBase: undefined }
-                  : h
-              ));
-              setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
-              showNotification(`اطلاعات ملک با موفقیت در گوگل شیت ویرایش شد.`);
-              try {
-                const fresh = await fetchViaWebhook(webhookUrl);
-                setHouses(prev => mergeRemoteWithLocal(prev, fresh));
-              } catch (e) {
-                console.warn('Post-update webhook sync failed:', e);
-              }
-            } else {
-              // بدون شیت، فقط نسخه محلی را ویرایش کن.
-              setHouses(prev => prev.map(h =>
-                h.id === houseData.id
-                  ? { ...houseData, syncStatus: 'synced' as const, syncError: undefined }
-                  : h
-              ));
-              setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
-              showNotification(`اطلاعات ملک در لیست محلی ویرایش شد.`, 'info');
-            }
-          } catch (err: any) {
-            const errorMsg = getNormalizedErrorMessage(err);
-            console.error('Update error:', err);
             setHouses(prev => prev.map(h =>
               h.id === houseData.id
-                ? { ...houseData, uid: stableUid, pendingOp: 'update' as const, retryBase: originalHouse, syncStatus: 'failed' as const, syncError: errorMsg }
+                ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined, pendingOp: undefined, retryBase: undefined }
                 : h
             ));
-            setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
-            showNotification(errorMsg, 'error');
+            showNotification(`اطلاعات ملک با موفقیت در گوگل شیت بروزرسانی شد.`);
+            await syncFromSheet(updateToken, activeSheet.id, activeSheet.sheetName);
+          } else if (webhookUrl) {
+            const remoteHouses = await fetchViaWebhook(webhookUrl);
+            const currentRowIndex = await resolveCurrentRowIndex(
+              remoteHouses,
+              { ...originalHouse, uid: originalHouse.uid || houseData.uid },
+              originalHouse
+            );
+            const updatedHouse = { ...houseData, uid: stableUid, rowIndex: currentRowIndex };
 
-            // در صورت stale شدن rowIndex، وضعیت واقعی شیت را دوباره دریافت کن.
+            await updateViaWebhookVerified(webhookUrl, currentRowIndex, updatedHouse);
+
+            setHouses(prev => prev.map(h =>
+              h.id === houseData.id
+                ? { ...updatedHouse, syncStatus: 'synced' as const, syncError: undefined, pendingOp: undefined, retryBase: undefined }
+                : h
+            ));
+            showNotification(`اطلاعات ملک با موفقیت در گوگل شیت بروزرسانی شد.`);
             try {
-              if (currentToken && activeSheet) {
-                await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
-              } else if (webhookUrl) {
-                const fresh = await fetchViaWebhook(webhookUrl);
-                setHouses(prev => mergeRemoteWithLocal(prev, fresh));
-              }
-            } catch (syncErr) {
-              console.warn('Update recovery sync failed:', syncErr);
+              const fresh = await fetchViaWebhook(webhookUrl);
+              setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+            } catch (e) {
+              console.warn('Post-update webhook sync failed:', e);
             }
-          } finally {
-            updateInProgressRef.current = false;
-            inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+          } else {
+            // بدون شیت، نسخه محلی ویرایش می‌شود
+            setHouses(prev => prev.map(h =>
+              h.id === houseData.id
+                ? { ...houseData, syncStatus: 'synced' as const, syncError: undefined }
+                : h
+            ));
+            showNotification(`اطلاعات ملک در لیست محلی ویرایش شد.`, 'info');
           }
-        },
-      });
+        } catch (err: any) {
+          const errorMsg = getNormalizedErrorMessage(err);
+          console.error('Update error:', err);
+          setHouses(prev => prev.map(h =>
+            h.id === houseData.id
+              ? { ...houseData, uid: stableUid, pendingOp: 'update' as const, retryBase: originalHouse, syncStatus: 'failed' as const, syncError: errorMsg }
+              : h
+          ));
+          showNotification(errorMsg, 'error');
+
+          try {
+            if (currentToken && activeSheet) {
+              await syncFromSheet(currentToken, activeSheet.id, activeSheet.sheetName);
+            } else if (webhookUrl) {
+              const fresh = await fetchViaWebhook(webhookUrl);
+              setHouses(prev => mergeRemoteWithLocal(prev, fresh));
+            }
+          } catch (syncErr) {
+            console.warn('Update recovery sync failed:', syncErr);
+          }
+        } finally {
+          updateInProgressRef.current = false;
+          inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        }
+      })();
+
       return;
     }
 
@@ -1556,18 +1540,37 @@ export default function App() {
 
         {/* نوار اکشن‌ها، ثبت سریع و جستجو */}
         <div className="bg-white rounded-3xl p-4 border border-slate-200 shadow-2xs space-y-3">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             
-            {/* جستجو */}
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
-              <input
-                type="text"
-                placeholder="جستجو در آدرس، نام مشاور املاک یا یادداشت‌ها..."
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="w-full pr-9 pl-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-slate-50/50"
-              />
+            {/* جستجو و مرتب‌سازی در کنار هم - کامپکت و منظم بدون اشغال فضای دسته‌بندی */}
+            <div className="flex items-center gap-2 flex-1 max-w-xl">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="جستجو در آدرس، نام مشاور املاک یا یادداشت‌ها..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full pr-9 pl-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-slate-50/50"
+                />
+              </div>
+
+              {/* مرتب‌سازی کامپکت کنار جستجو */}
+              <div className="flex items-center gap-1.5 bg-slate-100/90 hover:bg-slate-200/80 px-2.5 py-1.5 rounded-xl border border-slate-200 transition-colors flex-shrink-0">
+                <ArrowUpDown className="w-3.5 h-3.5 text-slate-500" />
+                <select
+                  value={sortBy}
+                  onChange={e => setSortBy(e.target.value as any)}
+                  className="text-2xs font-extrabold bg-transparent text-slate-800 focus:outline-none cursor-pointer"
+                  title="مرتب‌سازی"
+                >
+                  <option value="newest">جدیدترین</option>
+                  <option value="score">بیشترین امتیاز</option>
+                  <option value="price_asc">ارزان‌ترین</option>
+                  <option value="price_desc">گران‌ترین</option>
+                  <option value="area">بیشترین متراژ</option>
+                </select>
+              </div>
             </div>
 
             {/* دکمه‌های عملیات اصلی */}
@@ -1660,7 +1663,7 @@ export default function App() {
                   setEditingHouse(null);
                   setIsFormOpen(true);
                 }}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-extrabold shadow-sm flex items-center gap-1.5 transition-all"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-extrabold shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
               >
                 <Zap className="w-4 h-4 fill-white" />
                 <span>ثبت سریع در حضور املاک</span>
@@ -1668,67 +1671,48 @@ export default function App() {
             </div>
           </div>
 
-          {/* فیلترها و مرتب‌سازی */}
-          <div className="pt-2 border-t border-slate-100 space-y-2.5 text-xs">
-            {/* ردیف اول: تب‌های گروه‌بندی اصلی و مرتب‌سازی */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              {/* تب‌های گروه‌بندی اصلی (شامل همه خانه‌ها، وضعیت‌های ۵گانه فرآیند خرید، و آرشیو) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none flex-1 min-w-0">
-                {[
-                  { id: 'ALL', label: 'همه خانه‌ها', count: totalCount },
-                  { id: 'در انتظار تماس', label: 'در انتظار تماس', count: waitingCallCount, dot: 'bg-amber-500' },
-                  { id: 'هماهنگ شده', label: 'هماهنگ شده', count: scheduledCount, dot: 'bg-blue-500' },
-                  { id: 'بازدید شده', label: 'بازدید شده', count: visitedCount, dot: 'bg-purple-500' },
-                  { id: 'تایید شده', label: 'تایید شده', count: approvedCount, dot: 'bg-emerald-500' },
-                  { id: 'رد شده', label: 'رد شده', count: rejectedCount, dot: 'bg-rose-500' },
-                  { id: 'ARCHIVED', label: 'آرشیو', count: archivedCount },
-                ].map(item => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setFilterType(item.id)}
-                    className={`px-3 py-1.5 rounded-xl text-2xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${
-                      filterType === item.id
-                        ? 'bg-slate-900 text-white shadow-2xs'
-                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                    }`}
-                  >
-                    {item.dot && (
-                      <span className={`w-1.5 h-1.5 rounded-full ${item.dot}`} />
-                    )}
-                    <span>{item.label}</span>
-                    <span className={`px-1.5 py-0.2 rounded-md text-3xs ${
-                      filterType === item.id
-                        ? 'bg-white/20 text-white'
-                        : 'bg-slate-200 text-slate-600'
-                    }`}>
-                      {toPersianDigits(item.count)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-
-              {/* انتخاب مرتب‌سازی با حالت پیش‌فرض جدیدترین */}
-              <div className="flex items-center gap-2 flex-shrink-0 mr-auto">
-                <span className="text-2xs text-slate-400 font-semibold">مرتب‌سازی:</span>
-                <select
-                  value={sortBy}
-                  onChange={e => setSortBy(e.target.value as any)}
-                  className="px-2.5 py-1 text-2xs font-bold bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          {/* فیلترها و دسته‌بندی با انتخاب بسیار راحت و خوانا */}
+          <div className="pt-3 border-t border-slate-100 space-y-2.5 text-xs">
+            {/* ردیف اول: تب‌های دسته‌بندی فرآیند خرید - کاملاً عریض، واضح، بدون اسکرول مخفی و با کلیک بسیار آسان */}
+            <div className="flex flex-wrap items-center gap-2 w-full">
+              {[
+                { id: 'ALL', label: 'همه خانه‌ها', count: totalCount },
+                { id: 'در انتظار تماس', label: 'در انتظار تماس', count: waitingCallCount, dot: 'bg-amber-500' },
+                { id: 'هماهنگ شده', label: 'هماهنگ شده', count: scheduledCount, dot: 'bg-blue-500' },
+                { id: 'بازدید شده', label: 'بازدید شده', count: visitedCount, dot: 'bg-purple-500' },
+                { id: 'تایید شده', label: 'تایید شده', count: approvedCount, dot: 'bg-emerald-500' },
+                { id: 'رد شده', label: 'رد شده', count: rejectedCount, dot: 'bg-rose-500' },
+                { id: 'ARCHIVED', label: 'آرشیو', count: archivedCount },
+              ].map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setFilterType(item.id)}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    filterType === item.id
+                      ? 'bg-slate-900 text-white shadow-xs ring-1 ring-slate-900'
+                      : 'bg-slate-100 hover:bg-slate-200/90 text-slate-700'
+                  }`}
                 >
-                  <option value="newest">جدیدترین (پیش‌فرض)</option>
-                  <option value="score">بیشترین امتیاز (از ۱۰)</option>
-                  <option value="price_asc">قیمت: ارزان‌ترین</option>
-                  <option value="price_desc">قیمت: بالاترین</option>
-                  <option value="area">بیشترین متراژ</option>
-                </select>
-              </div>
+                  {item.dot && (
+                    <span className={`w-2 h-2 rounded-full ${item.dot} flex-shrink-0`} />
+                  )}
+                  <span>{item.label}</span>
+                  <span className={`px-1.5 py-0.5 rounded-md text-3xs font-extrabold ${
+                    filterType === item.id
+                      ? 'bg-white/20 text-white'
+                      : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {toPersianDigits(item.count)}
+                  </span>
+                </button>
+              ))}
             </div>
 
-            {/* ردیف دوم: فیلترهای همزمان و چند انتخابی (Multi-Select) */}
-            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
-              <span className="text-2xs font-bold text-slate-500 flex items-center gap-1">
-                <Filter className="w-3.5 h-3.5 text-emerald-600" />
+            {/* ردیف دوم: فیلترهای همزمان (Multi-Select) */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100">
+              <span className="text-2xs font-bold text-slate-500 flex items-center gap-1 pl-1">
+                <Filter className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
                 <span>فیلترهای همزمان:</span>
               </span>
 
@@ -1767,10 +1751,10 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setSelectedFeatures([])}
-                  className="px-2.5 py-1 text-3xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-xl font-bold flex items-center gap-1 transition-colors border border-rose-200"
+                  className="px-2.5 py-1 text-3xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-xl font-bold flex items-center gap-1 transition-colors border border-rose-200 cursor-pointer"
                 >
                   <X className="w-3 h-3" />
-                  <span>پاک کردن فیلترها ({toPersianDigits(selectedFeatures.length)})</span>
+                  <span>پاک کردن ({toPersianDigits(selectedFeatures.length)})</span>
                 </button>
               )}
             </div>
@@ -1902,9 +1886,24 @@ export default function App() {
         details={confirmationState.details}
         confirmLabel={confirmationState.confirmLabel}
         isDangerous={confirmationState.isDangerous}
-        isLoading={confirmationState.isLoading ?? isSyncing}
+        isLoading={Boolean(confirmationState.isLoading)}
         onConfirm={confirmationState.onConfirm}
-        onCancel={() => setConfirmationState(prev => ({ ...prev, isOpen: false }))}
+        onCancel={() => {
+          if (!confirmationState.isLoading) {
+            // انصراف کامل قبل از زدن دکمه تایید
+            setConfirmationState(prev => ({ ...prev, isOpen: false, isLoading: false }));
+            updateInProgressRef.current = false;
+            deleteInProgressRef.current = false;
+          } else {
+            // اگر عملیات در حال انجام بود و کاربر پنجره را بست، در پس‌زمینه ادامه می‌یابد
+            setConfirmationState(prev => ({ ...prev, isOpen: false }));
+            showNotification('عملیات در پس‌زمینه در حال انجام است...', 'info');
+          }
+        }}
+        onCloseBackground={() => {
+          setConfirmationState(prev => ({ ...prev, isOpen: false }));
+          showNotification('عملیات در پس‌زمینه در حال انجام است...', 'info');
+        }}
       />
 
       {/* ۴. راهنمای حل مشکل دامنه غیرمجاز فایربیس */}
