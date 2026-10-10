@@ -7,11 +7,27 @@ export type AgentCallStatus =
 
 export type HouseVisitStatus = 
   | 'در انتظار تماس'
-  | 'قرار بازدید گذاشته شد'
+  | 'هماهنگ شده'
   | 'بازدید شده'
-  | 'پسندیده شد (گزینه اصلی)'
-  | 'رد شد'
-  | 'در حال مذاکره / بیعانه';
+  | 'رد شده'
+  | 'تایید شده';
+
+export const HOUSE_VISIT_STATUSES: HouseVisitStatus[] = [
+  'در انتظار تماس',
+  'هماهنگ شده',
+  'بازدید شده',
+  'رد شده',
+  'تایید شده',
+];
+
+export const normalizeHouseVisitStatus = (raw: string | undefined | null): HouseVisitStatus => {
+  const val = (raw || '').trim();
+  if (val === 'تایید شده' || val.includes('تایید') || val.includes('پسندیده')) return 'تایید شده';
+  if (val === 'رد شده' || val.includes('رد')) return 'رد شده';
+  if (val === 'بازدید شده') return 'بازدید شده';
+  if (val === 'هماهنگ شده' || val.includes('هماهنگ') || val.includes('قرار')) return 'هماهنگ شده';
+  return 'در انتظار تماس';
+};
 
 export type DeedStatus = 
   | 'سند تک‌برگ ملکی'

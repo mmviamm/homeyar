@@ -20,7 +20,7 @@ import {
   Archive,
   ArchiveRestore
 } from 'lucide-react';
-import { DivarHouseVisit } from '../types/house';
+import { DivarHouseVisit, HouseVisitStatus, HOUSE_VISIT_STATUSES } from '../types/house';
 import { 
   toPersianDigits, 
   formatNumberFa, 
@@ -37,6 +37,7 @@ interface HouseCardProps {
   onForgetFailed?: (house: DivarHouseVisit) => void;
   isComparing?: boolean;
   onToggleCompare?: (house: DivarHouseVisit) => void;
+  onStatusChange?: (house: DivarHouseVisit, newStatus: HouseVisitStatus) => void;
 }
 
 export const HouseCard: React.FC<HouseCardProps> = ({
@@ -48,6 +49,7 @@ export const HouseCard: React.FC<HouseCardProps> = ({
   onForgetFailed,
   isComparing = false,
   onToggleCompare,
+  onStatusChange,
 }) => {
   const getCallBadge = (status: string) => {
     if (status.includes('هماهنگ شد')) {
@@ -57,6 +59,37 @@ export const HouseCard: React.FC<HouseCardProps> = ({
       return 'bg-rose-100 text-rose-800 border-rose-200';
     }
     return 'bg-slate-100 text-slate-700 border-slate-200';
+  };
+
+  const getVisitStatusBadge = (status: string | undefined) => {
+    switch (status) {
+      case 'تایید شده':
+        return {
+          bg: 'bg-emerald-50 text-emerald-800 border-emerald-300',
+          dot: 'bg-emerald-500',
+        };
+      case 'رد شده':
+        return {
+          bg: 'bg-rose-50 text-rose-800 border-rose-300',
+          dot: 'bg-rose-500',
+        };
+      case 'بازدید شده':
+        return {
+          bg: 'bg-purple-50 text-purple-800 border-purple-300',
+          dot: 'bg-purple-500',
+        };
+      case 'هماهنگ شده':
+        return {
+          bg: 'bg-blue-50 text-blue-800 border-blue-300',
+          dot: 'bg-blue-500',
+        };
+      case 'در انتظار تماس':
+      default:
+        return {
+          bg: 'bg-amber-50 text-amber-800 border-amber-300',
+          dot: 'bg-amber-500',
+        };
+    }
   };
 
   const getScoreBadgeColor = (score: number) => {
@@ -128,6 +161,12 @@ export const HouseCard: React.FC<HouseCardProps> = ({
           <div className="flex-1 min-w-0">
             {/* وضعیت تماس، آگهی و سینک شیت */}
             <div className="flex items-center gap-2 flex-wrap mb-2">
+              {/* وضعیت فرآیند خرید */}
+              <span className={`px-2.5 py-0.5 text-3xs font-black rounded-full border flex items-center gap-1.5 ${getVisitStatusBadge(house.visitStatus).bg}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${getVisitStatusBadge(house.visitStatus).dot}`} />
+                <span>{house.visitStatus || 'در انتظار تماس'}</span>
+              </span>
+
               <span className={`px-2.5 py-0.5 text-3xs font-bold rounded-full border ${getCallBadge(house.agentCallStatus)}`}>
                 {house.agentCallStatus}
               </span>
@@ -303,6 +342,25 @@ export const HouseCard: React.FC<HouseCardProps> = ({
             }`}>
               {house.waitsForMortgageLoan}
             </span>
+          </div>
+
+          <div className="flex items-center justify-between p-2 bg-slate-50 rounded-xl border border-slate-100">
+            <span className="text-slate-500 font-medium">وضعیت فرآیند خرید:</span>
+            {onStatusChange ? (
+              <select
+                value={house.visitStatus || 'در انتظار تماس'}
+                onChange={e => onStatusChange(house, e.target.value as HouseVisitStatus)}
+                className={`text-2xs font-extrabold px-2 py-0.5 rounded-lg border focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer ${getVisitStatusBadge(house.visitStatus).bg}`}
+              >
+                {HOUSE_VISIT_STATUSES.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            ) : (
+              <span className={`font-bold px-2 py-0.5 rounded-md border text-3xs ${getVisitStatusBadge(house.visitStatus).bg}`}>
+                {house.visitStatus || 'در انتظار تماس'}
+              </span>
+            )}
           </div>
         </div>
 

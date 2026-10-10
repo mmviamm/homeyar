@@ -224,6 +224,28 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({
                   ))}
                 </tr>
 
+                {/* وضعیت فرآیند خرید */}
+                <tr>
+                  <td className="p-3 font-semibold text-slate-600">وضعیت فرآیند خرید</td>
+                  {houses.map(house => (
+                    <td key={house.id} className="p-3">
+                      <span className={`px-2.5 py-1 rounded-lg text-2xs font-extrabold border inline-block ${
+                        house.visitStatus === 'تایید شده'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                          : house.visitStatus === 'رد شده'
+                          ? 'bg-rose-50 text-rose-800 border-rose-300'
+                          : house.visitStatus === 'بازدید شده'
+                          ? 'bg-purple-50 text-purple-800 border-purple-300'
+                          : house.visitStatus === 'هماهنگ شده'
+                          ? 'bg-blue-50 text-blue-800 border-blue-300'
+                          : 'bg-amber-50 text-amber-800 border-amber-300'
+                      }`}>
+                        {house.visitStatus || 'در انتظار تماس'}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+
                 {/* وضعیت تماس و قرار */}
                 <tr>
                   <td className="p-3 font-semibold text-slate-600">تماس با املاک و قرار</td>

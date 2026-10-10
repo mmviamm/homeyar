@@ -15,7 +15,7 @@ import {
   ArchiveRestore,
   X
 } from 'lucide-react';
-import { DivarHouseVisit } from '../types/house';
+import { DivarHouseVisit, HouseVisitStatus, HOUSE_VISIT_STATUSES } from '../types/house';
 import { 
   toPersianDigits, 
   formatNumberFa, 
@@ -31,6 +31,7 @@ interface SheetTableViewProps {
   onToggleArchive?: (house: DivarHouseVisit) => void;
   onRetrySync?: (house: DivarHouseVisit) => void;
   onForgetFailed?: (house: DivarHouseVisit) => void;
+  onStatusChange?: (house: DivarHouseVisit, newStatus: HouseVisitStatus) => void;
 }
 
 export const SheetTableView: React.FC<SheetTableViewProps> = ({
@@ -41,9 +42,10 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
   onToggleArchive,
   onRetrySync,
   onForgetFailed,
+  onStatusChange,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortField, setSortField] = useState<'rowIndex' | 'totalPriceMillion' | 'score' | 'areaSqm'>('rowIndex');
+  const [sortField, setSortField] = useState<'rowIndex' | 'totalPriceMillion' | 'score' | 'areaSqm' | 'pricePerMeter' | 'visitStatus'>('rowIndex');
   const [sortAsc, setSortAsc] = useState(true);
 
   const filtered = houses.filter(h => {
@@ -52,13 +54,23 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
       (h.title && h.title.toLowerCase().includes(q)) ||
       (h.address && h.address.toLowerCase().includes(q)) ||
       (h.realEstateAgentAddress && h.realEstateAgentAddress.toLowerCase().includes(q)) ||
-      (h.reviewText && h.reviewText.toLowerCase().includes(q))
+      (h.reviewText && h.reviewText.toLowerCase().includes(q)) ||
+      (h.visitStatus && h.visitStatus.toLowerCase().includes(q))
     );
   });
 
   const sorted = [...filtered].sort((a, b) => {
-    const aVal = a[sortField] || 0;
-    const bVal = b[sortField] || 0;
+    let aVal: any = a[sortField as keyof DivarHouseVisit] || 0;
+    let bVal: any = b[sortField as keyof DivarHouseVisit] || 0;
+
+    if (sortField === 'pricePerMeter') {
+      aVal = a.areaSqm > 0 ? a.totalPriceMillion / a.areaSqm : 0;
+      bVal = b.areaSqm > 0 ? b.totalPriceMillion / b.areaSqm : 0;
+    } else if (sortField === 'visitStatus') {
+      aVal = String(a.visitStatus || '');
+      bVal = String(b.visitStatus || '');
+    }
+
     if (aVal < bVal) return sortAsc ? -1 : 1;
     if (aVal > bVal) return sortAsc ? 1 : -1;
     return 0;
@@ -128,6 +140,12 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
                   <ArrowUpDown className="w-3 h-3" />
                 </div>
               </th>
+              <th className="p-3 cursor-pointer hover:text-white" onClick={() => toggleSort('pricePerMeter')}>
+                <div className="flex items-center gap-1">
+                  <span>قیمت هر متر (م.تومان)</span>
+                  <ArrowUpDown className="w-3 h-3" />
+                </div>
+              </th>
               <th className="p-3 cursor-pointer hover:text-white" onClick={() => toggleSort('areaSqm')}>
                 <div className="flex items-center gap-1">
                   <span>متراژ</span>
@@ -137,6 +155,12 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
               <th className="p-3">طبقه</th>
               <th className="p-3">امکانات (پارکینگ/آسانسور/انباری/تراس)</th>
               <th className="p-3">سند و وام</th>
+              <th className="p-3 cursor-pointer hover:text-white" onClick={() => toggleSort('visitStatus')}>
+                <div className="flex items-center gap-1">
+                  <span>وضعیت فرآیند خرید</span>
+                  <ArrowUpDown className="w-3 h-3" />
+                </div>
+              </th>
               <th className="p-3">وضعیت تماس و قرار</th>
               <th className="p-3">مشاور املاک</th>
               <th className="p-3 max-w-[200px]">نظر و ارزیابی</th>
@@ -173,6 +197,10 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
                   </div>
                 </td>
 
+                <td className="p-3 font-bold text-slate-800 whitespace-nowrap">
+                  <div className="text-2xs font-extrabold">{calculatePricePerMeter(house.totalPriceMillion, house.areaSqm)}</div>
+                </td>
+
                 <td className="p-3 whitespace-nowrap">
                   {toPersianDigits(house.areaSqm)} متر
                 </td>
@@ -201,6 +229,44 @@ export const SheetTableView: React.FC<SheetTableViewProps> = ({
                 <td className="p-3 max-w-[150px] text-3xs">
                   <div className="font-semibold text-slate-800 truncate">{house.deedStatus}</div>
                   <div className="text-slate-500 truncate">{house.waitsForMortgageLoan}</div>
+                </td>
+
+                <td className="p-3 whitespace-nowrap text-3xs">
+                  {onStatusChange ? (
+                    <select
+                      value={house.visitStatus || 'در انتظار تماس'}
+                      onChange={e => onStatusChange(house, e.target.value as HouseVisitStatus)}
+                      className={`font-extrabold px-2 py-1 rounded-lg border focus:outline-none cursor-pointer ${
+                        house.visitStatus === 'تایید شده'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                          : house.visitStatus === 'رد شده'
+                          ? 'bg-rose-50 text-rose-800 border-rose-300'
+                          : house.visitStatus === 'بازدید شده'
+                          ? 'bg-purple-50 text-purple-800 border-purple-300'
+                          : house.visitStatus === 'هماهنگ شده'
+                          ? 'bg-blue-50 text-blue-800 border-blue-300'
+                          : 'bg-amber-50 text-amber-800 border-amber-300'
+                      }`}
+                    >
+                      {HOUSE_VISIT_STATUSES.map(s => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className={`px-2 py-1 rounded-lg font-bold border inline-block ${
+                      house.visitStatus === 'تایید شده'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                        : house.visitStatus === 'رد شده'
+                        ? 'bg-rose-50 text-rose-800 border-rose-300'
+                        : house.visitStatus === 'بازدید شده'
+                        ? 'bg-purple-50 text-purple-800 border-purple-300'
+                        : house.visitStatus === 'هماهنگ شده'
+                        ? 'bg-blue-50 text-blue-800 border-blue-300'
+                        : 'bg-amber-50 text-amber-800 border-amber-300'
+                    }`}>
+                      {house.visitStatus || 'در انتظار تماس'}
+                    </span>
+                  )}
                 </td>
 
                 <td className="p-3 whitespace-nowrap text-3xs">

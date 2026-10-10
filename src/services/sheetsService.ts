@@ -1,4 +1,4 @@
-import { DivarHouseVisit, HouseVisitStatus, AgentCallStatus, DeedStatus, MortgageWaitingStatus } from '../types/house';
+import { DivarHouseVisit, HouseVisitStatus, AgentCallStatus, DeedStatus, MortgageWaitingStatus, normalizeHouseVisitStatus } from '../types/house';
 
 export const SHEET_NAME_VISITS = 'لیست بازدید خانه‌های دیوار';
 
@@ -217,7 +217,7 @@ export const rowValuesToHouse = (row: any[], rowIndex: number): DivarHouseVisit 
     appointmentDateTime: parseString(row[19]),
     score: parseNum(row[20]) || 5,
     reviewText: parseString(row[21]),
-    visitStatus: (parseString(row[22]) as HouseVisitStatus) || 'در انتظار تماس',
+    visitStatus: normalizeHouseVisitStatus(parseString(row[22])),
     updatedAt: parseString(row[23]),
   };
 };

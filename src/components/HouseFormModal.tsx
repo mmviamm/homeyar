@@ -21,6 +21,7 @@ import {
 import { 
   DivarHouseVisit, 
   HouseVisitStatus, 
+  HOUSE_VISIT_STATUSES,
   AgentCallStatus, 
   DeedStatus, 
   MortgageWaitingStatus 
@@ -555,6 +556,40 @@ export const HouseFormModal: React.FC<HouseFormModalProps> = ({
                   className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-xl"
                 />
               </div>
+            </div>
+          </div>
+
+          {/* وضعیت فرآیند خرید */}
+          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+            <label className="block text-xs font-bold text-slate-800">
+              وضعیت فرآیند خرید *
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {HOUSE_VISIT_STATUSES.map(st => {
+                const isSelected = formData.visitStatus === st;
+                return (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, visitStatus: st })}
+                    className={`py-2 px-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1 transition-all text-center ${
+                      isSelected
+                        ? st === 'تایید شده'
+                          ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
+                          : st === 'رد شده'
+                          ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
+                          : st === 'بازدید شده'
+                          ? 'bg-purple-600 text-white border-purple-700 shadow-xs'
+                          : st === 'هماهنگ شده'
+                          ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                          : 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>{st}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

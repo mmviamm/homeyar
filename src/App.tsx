@@ -19,10 +19,11 @@ import {
   AlertTriangle,
   RefreshCw,
   Smartphone,
-  X
+  X,
+  Filter
 } from 'lucide-react';
 
-import { DivarHouseVisit, ActiveSpreadsheetInfo } from './types/house';
+import { DivarHouseVisit, ActiveSpreadsheetInfo, HouseVisitStatus } from './types/house';
 import { 
   initAuth, 
   googleSignIn, 
@@ -168,10 +169,17 @@ export default function App() {
   // وضعیت‌های نمایش و فیلتر
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [filterType, setFilterType] = useState<string>('ALL');
-  const [sortBy, setSortBy] = useState<'score' | 'price_asc' | 'price_desc' | 'area'>('score');
+  const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
+  const [sortBy, setSortBy] = useState<'newest' | 'score' | 'price_asc' | 'price_desc' | 'area'>('newest');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedForCompare, setSelectedForCompare] = useState<DivarHouseVisit[]>([]);
   const [showCompareModal, setShowCompareModal] = useState(false);
+
+  const toggleFeature = (featureId: string) => {
+    setSelectedFeatures(prev =>
+      prev.includes(featureId) ? prev.filter(id => id !== featureId) : [...prev, featureId]
+    );
+  };
 
   // مودال‌های ثبت و ویرایش
   const [editingHouse, setEditingHouse] = useState<DivarHouseVisit | null>(null);
@@ -954,6 +962,35 @@ export default function App() {
     });
   };
 
+  // تغییر سریع وضعیت فرآیند خرید با همگام‌سازی مستقیم در گوگل شیت
+  const handleStatusChange = async (house: DivarHouseVisit, newStatus: HouseVisitStatus) => {
+    if (house.syncStatus === 'pending' || retryInProgressRef.current.has(house.id)) return;
+    if (house.visitStatus === newStatus) return;
+    const name = house.title || house.address;
+
+    // حالت آفلاین (بدون شیت): فقط محلی
+    if (!activeSheet && !webhookUrl) {
+      setHouses(prev => prev.map(h => (h.id === house.id ? { ...h, visitStatus: newStatus } : h)));
+      showNotification(`وضعیت خرید «${name}» به «${newStatus}» تغییر یافت.`, 'info');
+      return;
+    }
+
+    const updated: DivarHouseVisit = {
+      ...house,
+      visitStatus: newStatus,
+      pendingOp: house.pendingOp === 'create' ? 'create' : 'update',
+      retryBase:
+        house.pendingOp === 'create'
+          ? undefined
+          : house.retryBase || { ...house, retryBase: undefined, pendingOp: undefined },
+    };
+    setHouses(prev => prev.map(h => (h.id === house.id ? updated : h)));
+    await handleRetrySync(updated, {
+      quiet: true,
+      successMessage: `وضعیت خرید «${name}» به «${newStatus}» تغییر یافت.`,
+    });
+  };
+
   // فراموش کردن یک مورد ناموفق (ایجاد، ویرایش یا حذف) بدون دست زدن به سایر موارد:
   // - ایجاد ناموفق: ملک محلی که هرگز به شیت نرسیده کنار گذاشته می‌شود.
   // - ویرایش ناموفق: تغییرات لغو می‌شود و نسخه قبل از ویرایش برمی‌گردد.
@@ -1242,25 +1279,47 @@ export default function App() {
   useEffect(() => {
     let result = [...houses];
 
-    // آرشیو: به‌صورت پیش‌فرض مخفی است (مگر ملکی که ارسالش ناموفق بوده تا دکمه تلاش مجدد دیده شود)
+    // ۱. تفکیک آرشیو و موارد فعال
     if (filterType === 'ARCHIVED') {
       result = result.filter(h => h.isArchived);
     } else {
       result = result.filter(h => !h.isArchived || h.syncStatus === 'failed');
+
+      // ۲. فیلتر دسته‌بندی بر اساس وضعیت فرآیند خرید
+      if (filterType !== 'ALL') {
+        result = result.filter(h => (h.visitStatus || 'در انتظار تماس') === filterType);
+      }
     }
 
-    // فیلتر دسته‌بندی
-    if (filterType === 'SCHEDULED') {
-      result = result.filter(h => h.appointmentDateTime && h.appointmentDateTime !== '-' && h.appointmentDateTime.trim() !== '');
-    } else if (filterType === 'LOAN_OK') {
-      result = result.filter(h => h.waitsForMortgageLoan.includes('بله'));
-    } else if (filterType === 'PARKING_ELEVATOR') {
-      result = result.filter(h => h.hasParking && h.hasElevator);
-    } else if (filterType === 'SANAD_TAKBARG') {
-      result = result.filter(h => h.deedStatus === 'سند تک‌برگ ملکی');
+    // ۳. فیلترهای همزمان و چند انتخابی (Multi-Select)
+    if (selectedFeatures.length > 0) {
+      result = result.filter(h => {
+        if (selectedFeatures.includes('SANAD_TAKBARG') && h.deedStatus !== 'سند تک‌برگ ملکی') {
+          return false;
+        }
+        if (selectedFeatures.includes('LOAN_OK') && !h.waitsForMortgageLoan.includes('بله')) {
+          return false;
+        }
+        if (selectedFeatures.includes('PARKING') && !h.hasParking) {
+          return false;
+        }
+        if (selectedFeatures.includes('ELEVATOR') && !h.hasElevator) {
+          return false;
+        }
+        if (selectedFeatures.includes('STORAGE') && !h.hasStorage) {
+          return false;
+        }
+        if (selectedFeatures.includes('BALCONY') && !h.hasBalcony) {
+          return false;
+        }
+        if (selectedFeatures.includes('SCHEDULED') && (!h.appointmentDateTime || h.appointmentDateTime === '-' || !h.appointmentDateTime.trim())) {
+          return false;
+        }
+        return true;
+      });
     }
 
-    // جستجوی متنی
+    // ۴. جستجوی متنی
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(
@@ -1269,13 +1328,23 @@ export default function App() {
           (h.address && h.address.toLowerCase().includes(q)) ||
           (h.realEstateAgentAddress && h.realEstateAgentAddress.toLowerCase().includes(q)) ||
           (h.realEstateAgentPhone && h.realEstateAgentPhone.includes(q)) ||
-          (h.reviewText && h.reviewText.toLowerCase().includes(q))
+          (h.reviewText && h.reviewText.toLowerCase().includes(q)) ||
+          (h.visitStatus && h.visitStatus.toLowerCase().includes(q))
       );
     }
 
-    // مرتب‌سازی
+    // ۵. مرتب‌سازی (با جدیدترین به عنوان پیش‌فرض)
     result.sort((a, b) => {
       switch (sortBy) {
+        case 'newest': {
+          if (b.rowIndex && a.rowIndex && b.rowIndex !== a.rowIndex) {
+            return b.rowIndex - a.rowIndex;
+          }
+          if (b.updatedAt && a.updatedAt && b.updatedAt !== a.updatedAt) {
+            return b.updatedAt.localeCompare(a.updatedAt);
+          }
+          return 0;
+        }
         case 'score':
           return (b.score || 0) - (a.score || 0);
         case 'price_asc':
@@ -1290,7 +1359,7 @@ export default function App() {
     });
 
     setFilteredHouses(result);
-  }, [houses, filterType, sortBy, searchQuery]);
+  }, [houses, filterType, selectedFeatures, sortBy, searchQuery]);
 
   // مقایسه خانه‌ها
   const toggleCompare = (house: DivarHouseVisit) => {
@@ -1311,6 +1380,13 @@ export default function App() {
   const activeHouses = houses.filter(h => !h.isArchived);
   const archivedCount = houses.length - activeHouses.length;
   const totalCount = activeHouses.length;
+
+  // تعداد خانه‌ها به تفکیک وضعیت فرآیند خرید
+  const waitingCallCount = activeHouses.filter(h => (h.visitStatus || 'در انتظار تماس') === 'در انتظار تماس').length;
+  const scheduledCount = activeHouses.filter(h => h.visitStatus === 'هماهنگ شده').length;
+  const visitedCount = activeHouses.filter(h => h.visitStatus === 'بازدید شده').length;
+  const approvedCount = activeHouses.filter(h => h.visitStatus === 'تایید شده').length;
+  const rejectedCount = activeHouses.filter(h => h.visitStatus === 'رد شده').length;
   const avgPriceMillion = totalCount > 0 
     ? Math.round(activeHouses.reduce((acc, h) => acc + h.totalPriceMillion, 0) / totalCount) 
     : 0;
@@ -1593,45 +1669,110 @@ export default function App() {
           </div>
 
           {/* فیلترها و مرتب‌سازی */}
-          <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-            {/* تب‌های فیلتر سریع */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
-              {[
-                { id: 'ALL', label: 'همه خانه‌ها' },
-                { id: 'SCHEDULED', label: 'قرار بازدید هماهنگ شده' },
-                { id: 'LOAN_OK', label: 'پذیرش وام مسکن' },
-                { id: 'PARKING_ELEVATOR', label: 'پارکینگ و آسانسور دار' },
-                { id: 'SANAD_TAKBARG', label: 'سند تک‌برگ' },
-                { id: 'ARCHIVED', label: `آرشیو (${toPersianDigits(archivedCount)})` },
-              ].map(item => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setFilterType(item.id)}
-                  className={`px-3 py-1 rounded-xl text-2xs font-bold transition-all whitespace-nowrap ${
-                    filterType === item.id
-                      ? 'bg-slate-900 text-white shadow-2xs'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                  }`}
+          <div className="pt-2 border-t border-slate-100 space-y-2.5 text-xs">
+            {/* ردیف اول: تب‌های گروه‌بندی اصلی و مرتب‌سازی */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* تب‌های گروه‌بندی اصلی (شامل همه خانه‌ها، وضعیت‌های ۵گانه فرآیند خرید، و آرشیو) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none flex-1 min-w-0">
+                {[
+                  { id: 'ALL', label: 'همه خانه‌ها', count: totalCount },
+                  { id: 'در انتظار تماس', label: 'در انتظار تماس', count: waitingCallCount, dot: 'bg-amber-500' },
+                  { id: 'هماهنگ شده', label: 'هماهنگ شده', count: scheduledCount, dot: 'bg-blue-500' },
+                  { id: 'بازدید شده', label: 'بازدید شده', count: visitedCount, dot: 'bg-purple-500' },
+                  { id: 'تایید شده', label: 'تایید شده', count: approvedCount, dot: 'bg-emerald-500' },
+                  { id: 'رد شده', label: 'رد شده', count: rejectedCount, dot: 'bg-rose-500' },
+                  { id: 'ARCHIVED', label: 'آرشیو', count: archivedCount },
+                ].map(item => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setFilterType(item.id)}
+                    className={`px-3 py-1.5 rounded-xl text-2xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${
+                      filterType === item.id
+                        ? 'bg-slate-900 text-white shadow-2xs'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {item.dot && (
+                      <span className={`w-1.5 h-1.5 rounded-full ${item.dot}`} />
+                    )}
+                    <span>{item.label}</span>
+                    <span className={`px-1.5 py-0.2 rounded-md text-3xs ${
+                      filterType === item.id
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      {toPersianDigits(item.count)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {/* انتخاب مرتب‌سازی با حالت پیش‌فرض جدیدترین */}
+              <div className="flex items-center gap-2 flex-shrink-0 mr-auto">
+                <span className="text-2xs text-slate-400 font-semibold">مرتب‌سازی:</span>
+                <select
+                  value={sortBy}
+                  onChange={e => setSortBy(e.target.value as any)}
+                  className="px-2.5 py-1 text-2xs font-bold bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 >
-                  {item.label}
-                </button>
-              ))}
+                  <option value="newest">جدیدترین (پیش‌فرض)</option>
+                  <option value="score">بیشترین امتیاز (از ۱۰)</option>
+                  <option value="price_asc">قیمت: ارزان‌ترین</option>
+                  <option value="price_desc">قیمت: بالاترین</option>
+                  <option value="area">بیشترین متراژ</option>
+                </select>
+              </div>
             </div>
 
-            {/* انتخاب مرتب‌سازی */}
-            <div className="flex items-center gap-2 mr-auto">
-              <span className="text-2xs text-slate-400 font-semibold">مرتب‌سازی:</span>
-              <select
-                value={sortBy}
-                onChange={e => setSortBy(e.target.value as any)}
-                className="px-2.5 py-1 text-2xs font-bold bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              >
-                <option value="score">بیشترین امتیاز (از ۱۰)</option>
-                <option value="price_asc">قیمت: ارزان‌ترین</option>
-                <option value="price_desc">قیمت: بالاترین</option>
-                <option value="area">بیشترین متراژ</option>
-              </select>
+            {/* ردیف دوم: فیلترهای همزمان و چند انتخابی (Multi-Select) */}
+            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+              <span className="text-2xs font-bold text-slate-500 flex items-center gap-1">
+                <Filter className="w-3.5 h-3.5 text-emerald-600" />
+                <span>فیلترهای همزمان:</span>
+              </span>
+
+              {[
+                { id: 'SANAD_TAKBARG', label: 'سند تک‌برگ' },
+                { id: 'LOAN_OK', label: 'پذیرش وام مسکن' },
+                { id: 'PARKING', label: 'پارکینگ' },
+                { id: 'ELEVATOR', label: 'آسانسور' },
+                { id: 'STORAGE', label: 'انباری' },
+                { id: 'BALCONY', label: 'تراس' },
+                { id: 'SCHEDULED', label: 'قرار بازدید مشخص' },
+              ].map(f => {
+                const isActive = selectedFeatures.includes(f.id);
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => toggleFeature(f.id)}
+                    className={`px-2.5 py-1 rounded-xl text-3xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                      isActive
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800 ring-1 ring-emerald-300'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className={`w-3.5 h-3.5 rounded-md flex items-center justify-center text-3xs font-bold ${
+                      isActive ? 'bg-emerald-600 text-white' : 'border border-slate-300 bg-slate-50 text-transparent'
+                    }`}>
+                      ✓
+                    </span>
+                    <span>{f.label}</span>
+                  </button>
+                );
+              })}
+
+              {selectedFeatures.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedFeatures([])}
+                  className="px-2.5 py-1 text-3xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-xl font-bold flex items-center gap-1 transition-colors border border-rose-200"
+                >
+                  <X className="w-3 h-3" />
+                  <span>پاک کردن فیلترها ({toPersianDigits(selectedFeatures.length)})</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1653,6 +1794,7 @@ export default function App() {
                     onToggleArchive={handleToggleArchive}
                     onRetrySync={handleRetrySync}
                     onForgetFailed={handleForgetFailed}
+                    onStatusChange={handleStatusChange}
                     isComparing={selectedForCompare.some(c => c.id === house.id)}
                     onToggleCompare={toggleCompare}
                   />
@@ -1693,6 +1835,7 @@ export default function App() {
             onToggleArchive={handleToggleArchive}
             onRetrySync={handleRetrySync}
             onForgetFailed={handleForgetFailed}
+            onStatusChange={handleStatusChange}
           />
         )}
       </main>
