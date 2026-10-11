@@ -343,7 +343,12 @@ const customProxy: string | undefined = (import.meta as any).env?.VITE_DIVAR_PRO
 const proxyChain: ((u: string) => string)[] = [
   ...(customProxy ? [(u: string) => customProxy.replace('{url}', encodeURIComponent(u))] : []),
   u => u,
-  u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+  u => {
+    // corsproxy.io برای استفاده از مرورگر به کلید نیاز دارد: ?key=...&url=...
+    const key: string | undefined = (import.meta as any).env?.VITE_CORSPROXY_KEY;
+    const keyPart = key ? `key=${encodeURIComponent(key)}&` : '';
+    return `https://corsproxy.io/?${keyPart}url=${encodeURIComponent(u)}`;
+  },
   u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
 ];
 
