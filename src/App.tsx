@@ -24,7 +24,7 @@ import {
   ArrowUpDown
 } from 'lucide-react';
 
-import { DivarHouseVisit, ActiveSpreadsheetInfo, HouseVisitStatus } from './types/house';
+import { DivarHouseVisit, ActiveSpreadsheetInfo, HouseVisitStatus, AgentCallStatus } from './types/house';
 import { 
   initAuth, 
   googleSignIn, 
@@ -976,7 +976,7 @@ export default function App() {
   };
 
   // تغییر سریع وضعیت تماس با مشاور و همگام‌سازی آن با گوگل شیت
-  const handleAgentCallStatusChange = async (house: DivarHouseVisit, newStatus: import('./types/house').AgentCallStatus) => {
+  const handleAgentCallStatusChange = async (house: DivarHouseVisit, newStatus: AgentCallStatus) => {
     if (house.syncStatus === 'pending' || retryInProgressRef.current.has(house.id)) return;
     if (house.agentCallStatus === newStatus) return;
     const name = house.title || house.address;
