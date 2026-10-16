@@ -20,7 +20,7 @@ import {
   Archive,
   ArchiveRestore
 } from 'lucide-react';
-import { DivarHouseVisit, HouseVisitStatus, HOUSE_VISIT_STATUSES } from '../types/house';
+import { DivarHouseVisit, HouseVisitStatus, HOUSE_VISIT_STATUSES, AgentCallStatus } from '../types/house';
 import { 
   toPersianDigits, 
   formatNumberFa, 
@@ -38,6 +38,7 @@ interface HouseCardProps {
   isComparing?: boolean;
   onToggleCompare?: (house: DivarHouseVisit) => void;
   onStatusChange?: (house: DivarHouseVisit, newStatus: HouseVisitStatus) => void;
+  onAgentCallStatusChange?: (house: DivarHouseVisit, newStatus: AgentCallStatus) => void;
 }
 
 export const HouseCard: React.FC<HouseCardProps> = ({
@@ -50,6 +51,7 @@ export const HouseCard: React.FC<HouseCardProps> = ({
   isComparing = false,
   onToggleCompare,
   onStatusChange,
+  onAgentCallStatusChange,
 }) => {
   const getCallBadge = (status: string) => {
     if (status.includes('هماهنگ شد')) {
@@ -360,6 +362,24 @@ export const HouseCard: React.FC<HouseCardProps> = ({
               <span className={`font-bold px-2 py-0.5 rounded-md border text-3xs ${getVisitStatusBadge(house.visitStatus).bg}`}>
                 {house.visitStatus || 'در انتظار تماس'}
               </span>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between p-2 bg-slate-50 rounded-xl border border-slate-100">
+            <span className="text-slate-500 font-medium">وضعیت تماس با مشاور:</span>
+            {onAgentCallStatusChange ? (
+              <select
+                value={house.agentCallStatus || 'تماس گرفته نشده'}
+                onChange={e => onAgentCallStatusChange(house, e.target.value as AgentCallStatus)}
+                disabled={house.syncStatus === 'pending'}
+                className="text-2xs font-extrabold px-2 py-0.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
+              >
+                {(['تماس گرفته نشده', 'پاسخ داد و قرار هماهنگ شد', 'پاسخ داد ولی مناسب نبود', 'پاسخ نداد', 'خاموش یا اشغال بود', 'درانتظار خبر'] as AgentCallStatus[]).map(status => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="font-bold text-slate-800">{house.agentCallStatus || 'تماس گرفته نشده'}</span>
             )}
           </div>
         </div>

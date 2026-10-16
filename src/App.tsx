@@ -24,7 +24,7 @@ import {
   ArrowUpDown
 } from 'lucide-react';
 
-import { DivarHouseVisit, ActiveSpreadsheetInfo, HouseVisitStatus } from './types/house';
+import { DivarHouseVisit, ActiveSpreadsheetInfo, HouseVisitStatus, AgentCallStatus } from './types/house';
 import { 
   initAuth, 
   googleSignIn, 
@@ -975,6 +975,35 @@ export default function App() {
     });
   };
 
+  // تغییر سریع وضعیت تماس با مشاور و همگام‌سازی آن با گوگل شیت
+  const handleAgentCallStatusChange = async (house: DivarHouseVisit, newStatus: AgentCallStatus) => {
+    if (house.syncStatus === 'pending' || retryInProgressRef.current.has(house.id)) return;
+    if (house.agentCallStatus === newStatus) return;
+    const name = house.title || house.address;
+
+    // حالت آفلاین (بدون شیت): فقط محلی
+    if (!activeSheet && !webhookUrl) {
+      setHouses(prev => prev.map(h => (h.id === house.id ? { ...h, agentCallStatus: newStatus } : h)));
+      showNotification(`وضعیت تماس با مشاور برای «${name}» به «${newStatus}» تغییر یافت.`, 'info');
+      return;
+    }
+
+    const updated: DivarHouseVisit = {
+      ...house,
+      agentCallStatus: newStatus,
+      pendingOp: house.pendingOp === 'create' ? 'create' : 'update',
+      retryBase:
+        house.pendingOp === 'create'
+          ? undefined
+          : house.retryBase || { ...house, retryBase: undefined, pendingOp: undefined },
+    };
+    setHouses(prev => prev.map(h => (h.id === house.id ? updated : h)));
+    await handleRetrySync(updated, {
+      quiet: true,
+      successMessage: `وضعیت تماس با مشاور برای «${name}» به «${newStatus}» تغییر یافت.`,
+    });
+  };
+
   // فراموش کردن یک مورد ناموفق (ایجاد، ویرایش یا حذف) بدون دست زدن به سایر موارد:
   // - ایجاد ناموفق: ملک محلی که هرگز به شیت نرسیده کنار گذاشته می‌شود.
   // - ویرایش ناموفق: تغییرات لغو می‌شود و نسخه قبل از ویرایش برمی‌گردد.
@@ -1297,6 +1326,12 @@ export default function App() {
           return false;
         }
         if (selectedFeatures.includes('SCHEDULED') && (!h.appointmentDateTime || h.appointmentDateTime === '-' || !h.appointmentDateTime.trim())) {
+          return false;
+        }
+        if (selectedFeatures.includes('FLOOR_3_NO_ELEVATOR') && (h.floor < 3 || h.hasElevator)) {
+          return false;
+        }
+        if (selectedFeatures.includes('AGENT_WAITING_NEWS') && h.agentCallStatus !== 'درانتظار خبر') {
           return false;
         }
         return true;
@@ -1724,6 +1759,8 @@ export default function App() {
                 { id: 'STORAGE', label: 'انباری' },
                 { id: 'BALCONY', label: 'تراس' },
                 { id: 'SCHEDULED', label: 'قرار بازدید مشخص' },
+                { id: 'FLOOR_3_NO_ELEVATOR', label: 'ط بالا ❌️ آسانسور' },
+                { id: 'AGENT_WAITING_NEWS', label: 'درانتظار خبر' },
               ].map(f => {
                 const isActive = selectedFeatures.includes(f.id);
                 return (
@@ -1779,6 +1816,7 @@ export default function App() {
                     onRetrySync={handleRetrySync}
                     onForgetFailed={handleForgetFailed}
                     onStatusChange={handleStatusChange}
+                    onAgentCallStatusChange={handleAgentCallStatusChange}
                     isComparing={selectedForCompare.some(c => c.id === house.id)}
                     onToggleCompare={toggleCompare}
                   />
