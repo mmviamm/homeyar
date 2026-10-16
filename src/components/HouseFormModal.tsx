@@ -600,6 +600,7 @@ export const HouseFormModal: React.FC<HouseFormModalProps> = ({
                   <option value="پاسخ داد ولی مناسب نبود">پاسخ داد ولی مناسب نبود</option>
                   <option value="پاسخ نداد">پاسخ نداد</option>
                   <option value="خاموش یا اشغال بود">خاموش یا اشغال بود</option>
+                  <option value="درانتظار خبر">درانتظار خبر</option>
                 </select>
               </div>
 
