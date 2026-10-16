@@ -1299,6 +1299,12 @@ export default function App() {
         if (selectedFeatures.includes('SCHEDULED') && (!h.appointmentDateTime || h.appointmentDateTime === '-' || !h.appointmentDateTime.trim())) {
           return false;
         }
+        if (selectedFeatures.includes('FLOOR_3_NO_ELEVATOR') && (h.floor < 3 || h.hasElevator)) {
+          return false;
+        }
+        if (selectedFeatures.includes('AGENT_WAITING_NEWS') && h.agentCallStatus !== 'درانتظار خبر') {
+          return false;
+        }
         return true;
       });
     }
@@ -1724,6 +1730,8 @@ export default function App() {
                 { id: 'STORAGE', label: 'انباری' },
                 { id: 'BALCONY', label: 'تراس' },
                 { id: 'SCHEDULED', label: 'قرار بازدید مشخص' },
+                { id: 'FLOOR_3_NO_ELEVATOR', label: 'ط بالا ❌️ آسانسور' },
+                { id: 'AGENT_WAITING_NEWS', label: 'درانتظار خبر' },
               ].map(f => {
                 const isActive = selectedFeatures.includes(f.id);
                 return (
